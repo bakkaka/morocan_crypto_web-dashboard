@@ -1,35 +1,30 @@
 // src/api/axiosConfig.ts
 import axios from 'axios';
 
-const API_BASE_URL = 'http://localhost:8000/api';
-
-// Configuration Axios globale
+// Configuration de base
 const api = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: 'http://localhost:8000/api',
   headers: {
     'Content-Type': 'application/json',
-    'Accept': 'application/ld+json, application/json',
+    'Accept': 'application/json',
   },
-  timeout: 15000,
-  withCredentials: false,
+  timeout: 10000,
 });
 
 // Intercepteur pour les requêtes
 api.interceptors.request.use(
   (config) => {
-    const safeLogData = config.data 
-      ? { ...config.data, plainPassword: config.data.plainPassword ? '***' : undefined }
-      : null;
+    // Ajouter le token d'authentification si disponible
+    const token = localStorage.getItem('authToken');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
     
-    console.log(`🚀 ${config.method?.toUpperCase()} ${config.baseURL}${config.url}`, {
-      headers: config.headers,
-      data: safeLogData
-    });
-    
+    console.log(`🔄 Requête API: ${config.method?.toUpperCase()} ${config.url}`);
     return config;
   },
   (error) => {
-    console.error('❌ Erreur intercepteur requête:', error);
+    console.error('❌ Erreur requête API:', error);
     return Promise.reject(error);
   }
 );
@@ -37,27 +32,21 @@ api.interceptors.request.use(
 // Intercepteur pour les réponses
 api.interceptors.response.use(
   (response) => {
-    console.log(`✅ ${response.status} ${response.config.url}`);
+    console.log(`✅ Réponse API: ${response.status} ${response.config.url}`);
     return response;
   },
   (error) => {
-    const errorInfo = {
-      message: error.message,
-      code: error.code,
-      status: error.response?.status,
+    console.error('❌ Erreur réponse API:', {
       url: error.config?.url,
-      method: error.config?.method,
-    };
+      status: error.response?.status,
+      message: error.message
+    });
     
-    console.error('❌ Erreur API:', errorInfo);
-    
-    // Amélioration du message d'erreur pour l'utilisateur
-    if (error.code === 'ERR_NETWORK') {
-      error.userMessage = 'Impossible de se connecter au serveur. Vérifiez votre connexion internet.';
-    } else if (error.response?.status === 415) {
-      error.userMessage = 'Format de données incompatible avec le serveur.';
-    } else if (error.response?.status >= 500) {
-      error.userMessage = 'Erreur interne du serveur. Veuillez réessayer plus tard.';
+    // Gérer les erreurs d'authentification
+    if (error.response?.status === 401) {
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('userData');
+      window.location.href = '/login';
     }
     
     return Promise.reject(error);

@@ -1,9 +1,12 @@
-/* Désactivation totale de Tailwind (retirer si tu n'en veux pas) */
-/* @tailwind base;
-@tailwind components;
-@tailwind utilities; */
+/* Import Bootstrap (déjà fait dans main.tsx) */
 
-/* Style global minimal compatible Bootstrap */
+/* Styles personnalisés */
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+}
+
 body {
   margin: 0;
   padding: 0;
@@ -14,4 +17,18 @@ body {
 
 a {
   text-decoration: none;
+}
+
+/* Personnalisation Bootstrap */
+.navbar-brand {
+  font-weight: 700;
+}
+
+.card {
+  border: none;
+  box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+}
+
+.btn {
+  border-radius: 0.375rem;
 }

@@ -1,10 +1,11 @@
 // src/pages/Login.tsx
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { loginUser, testAPIConnection } from '../api/AuthService';
+import { useAuth } from '../contexts/AuthContext';
 
 const Login: React.FC = () => {
   const navigate = useNavigate();
+  const { isAuthenticated, login, user } = useAuth();
 
   // États du formulaire
   const [formData, setFormData] = useState({
@@ -17,11 +18,28 @@ const Login: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [apiStatus, setApiStatus] = useState<{ connected: boolean; message: string } | null>(null);
 
+  // Redirection si déjà connecté
+  useEffect(() => {
+    console.log('🔍 useEffect - isAuthenticated:', isAuthenticated);
+    if (isAuthenticated) {
+      console.log('🔀 Redirection automatique vers /dashboard');
+      navigate('/dashboard');
+    }
+  }, [isAuthenticated, navigate]);
+
   // Test de connexion API au chargement
   useEffect(() => {
     const checkAPI = async () => {
-      const status = await testAPIConnection();
-      setApiStatus(status);
+      try {
+        // Pour le test API, on fait un simple fetch
+        const response = await fetch('http://localhost:8000/api/docs');
+        setApiStatus({ 
+          connected: response.ok, 
+          message: response.ok ? 'Serveur OK' : 'Serveur erreur' 
+        });
+      } catch (error) {
+        setApiStatus({ connected: false, message: 'Serveur non accessible' });
+      }
     };
     
     checkAPI();
@@ -63,16 +81,18 @@ const Login: React.FC = () => {
     try {
       console.log('🔄 Tentative de connexion...', { 
         email: formData.email, 
-        password: '***' // Ne pas logger le mot de passe en clair
+        password: '***'
       });
 
-      // Utiliser le service d'authentification
-      const response = await loginUser({
-        email: formData.email,
-        password: formData.password
-      });
+      // DEBUG AVANT LOGIN
+      console.log('1. Avant appel login()');
 
-      console.log('✅ Connexion réussie:', response);
+      await login(formData.email, formData.password);
+
+      // DEBUG APRÈS LOGIN RÉUSSI
+      console.log('2. Login réussi, vérification auth state');
+      console.log('3. isAuthenticated:', isAuthenticated);
+      console.log('4. user:', user);
 
       setMessage({
         text: '✅ Connexion réussie ! Redirection...',
@@ -85,8 +105,14 @@ const Login: React.FC = () => {
         password: '',
       });
 
-      // Redirection vers la page d'accueil après délai
-      setTimeout(() => navigate('/'), 2000);
+      // DEBUG AVANT REDIRECTION
+      console.log('5. Avant redirection vers /dashboard');
+
+      // Redirection vers dashboard
+      setTimeout(() => {
+        console.log('6. Exécution de la redirection');
+        navigate('/dashboard');
+      }, 2000);
 
     } catch (error: any) {
       console.error('💥 Erreur de connexion détaillée:', error);
@@ -95,16 +121,6 @@ const Login: React.FC = () => {
       
       if (error.message) {
         errorMessage = error.message;
-      } else if (error.response?.data?.message) {
-        errorMessage = error.response.data.message;
-      } else if (error.response?.status === 401) {
-        errorMessage = 'Email ou mot de passe incorrect';
-      } else if (error.response?.status === 404) {
-        errorMessage = 'Service de connexion indisponible';
-      } else if (error.code === 'ERR_NETWORK') {
-        errorMessage = 'Impossible de se connecter au serveur. Vérifiez votre connexion.';
-      } else if (error.code === 'ECONNABORTED') {
-        errorMessage = 'La requête a expiré. Veuillez réessayer.';
       }
 
       setMessage({
@@ -126,6 +142,33 @@ const Login: React.FC = () => {
     }
   };
 
+  // Si déjà connecté, afficher un message
+  if (isAuthenticated) {
+    return (
+      <div className="container mt-5">
+        <div className="row justify-content-center">
+          <div className="col-md-6">
+            <div className="card shadow-lg">
+              <div className="card-header bg-success text-white">
+                <h2 className="card-title text-center mb-0">Déjà connecté</h2>
+              </div>
+              <div className="card-body p-4 text-center">
+                <p className="mb-4">Vous êtes déjà connecté à votre compte.</p>
+                <Link 
+                  to="/dashboard" 
+                  className="btn btn-primary w-100 py-2 fw-bold"
+                >
+                  Aller au Tableau de bord
+                </Link>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Rendu normal
   return (
     <div className="container mt-5">
       <div className="row justify-content-center">
@@ -226,12 +269,13 @@ const Login: React.FC = () => {
                 </p>
               </div>
 
-              {/* Section debug (à cacher en production) */}
+              {/* Section debug */}
               <div className="mt-4 p-3 bg-light rounded">
                 <small className="text-muted">
                   <strong>Debug Info:</strong><br />
                   - API Status: {apiStatus?.connected ? 'Connected ✅' : 'Disconnected ❌'}<br />
                   - Loading: {loading ? 'Yes' : 'No'}<br />
+                  - Auth State: {isAuthenticated ? 'Authenticated' : 'Not authenticated'}<br />
                   - Form Valid: {formData.email && formData.password ? 'Yes' : 'No'}
                 </small>
               </div>
