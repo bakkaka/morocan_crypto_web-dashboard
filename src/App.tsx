@@ -11,7 +11,7 @@ import TransactionList from "./components/TransactionList";
 import Profile from "./components/Profile";
 import DashboardHome from "./components/DashboardHome";
 
-// Composant pour les routes protégées
+// Route protégée basique
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isAuthenticated, loading } = useAuth();
   
@@ -20,6 +20,44 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
   }
   
   return isAuthenticated ? <>{children}</> : <Navigate to="/login" />;
+};
+
+// Route protégée pour ADMIN seulement
+const AdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { isAuthenticated, isAdmin, loading } = useAuth();
+  
+  if (loading) {
+    return <div className="min-h-screen flex items-center justify-center">Chargement...</div>;
+  }
+  
+  if (!isAuthenticated) {
+    return <Navigate to="/login" />;
+  }
+  
+  if (!isAdmin) {
+    return <Navigate to="/dashboard" />;
+  }
+  
+  return <>{children}</>;
+};
+
+// Route protégée pour USER seulement
+const UserRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { isAuthenticated, isUser, loading } = useAuth();
+  
+  if (loading) {
+    return <div className="min-h-screen flex items-center justify-center">Chargement...</div>;
+  }
+  
+  if (!isAuthenticated) {
+    return <Navigate to="/login" />;
+  }
+  
+  if (!isUser) {
+    return <Navigate to="/dashboard" />;
+  }
+  
+  return <>{children}</>;
 };
 
 function App() {
@@ -32,21 +70,30 @@ function App() {
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
 
-          {/* PROTECTED ROUTES - SEULEMENT ProtectedRoute */}
+          {/* PROTECTED ROUTES */}
           <Route path="/dashboard" element={
             <ProtectedRoute>
               <Dashboard />
             </ProtectedRoute>
           }>
-            {/* Redirige /dashboard vers /dashboard/ads */}
+            {/* Redirige /dashboard vers /dashboard/home */}
             <Route index element={<DashboardHome />} />
             
-            <Route path="users" element={<UserList />} />
+            {/* ROUTES ADMIN SEULEMENT */}
+            <Route path="users" element={
+              <AdminRoute>
+                <UserList />
+              </AdminRoute>
+            } />
             
-            {/* Routes des annonces */}
+            {/* ROUTES POUR TOUS LES UTILISATEURS CONNECTÉS */}
             <Route path="ads">
               <Route index element={<AdList />} />
-              <Route path="create" element={<AdCreate />} />
+              <Route path="create" element={
+                <UserRoute>
+                  <AdCreate />
+                </UserRoute>
+              } />
             </Route>
             
             <Route path="transactions" element={<TransactionList />} />

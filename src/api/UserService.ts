@@ -1,6 +1,21 @@
 // src/api/UserService.ts
 import api from './axiosConfig';
 
+// --- Erreur personnalisée ---
+export class UserServiceError extends Error {
+  public code?: string;
+  public status?: number;
+  public details?: any;
+
+  constructor(message: string, code?: string, status?: number, details?: any) {
+    super(message);
+    this.name = 'UserServiceError';
+    this.code = code;
+    this.status = status;
+    this.details = details;
+  }
+}
+
 // --- Interfaces ---
 export interface User {
   id: number;
@@ -40,27 +55,17 @@ export interface UpdateUserData {
   isVerified?: boolean;
 }
 
-// --- Erreur personnalisée ---
-export class UserServiceError extends Error {
-  public code?: string;
-  public status?: number;
-  public details?: any;
-
-  constructor(message: string, code?: string, status?: number, details?: any) {
-    super(message);
-    this.name = 'UserServiceError';
-    this.code = code;
-    this.status = status;
-    this.details = details;
-  }
-}
-
 // --- Validation ---
-const validateEmail = (email: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-const validatePhone = (phone: string) => /^[+]?[(]?[0-9]{1,4}[)]?[-\s.]?[0-9]{1,4}[-\s.]?[0-9]{1,9}$/.test(phone);
-const validatePassword = (password: string) => password.length >= 6;
+const validateEmail = (email: string): boolean => 
+  /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
-const validateUserData = (data: RegisterUserData) => {
+const validatePhone = (phone: string): boolean => 
+  /^[+]?[(]?[0-9]{1,4}[)]?[-\s.]?[0-9]{1,4}[-\s.]?[0-9]{1,9}$/.test(phone);
+
+const validatePassword = (password: string): boolean => 
+  password.length >= 6;
+
+const validateUserData = (data: RegisterUserData): void => {
   if (!data.fullName || data.fullName.trim().length < 2) {
     throw new UserServiceError('Le nom complet doit contenir au moins 2 caractères', 'VALIDATION_ERROR');
   }
@@ -75,98 +80,259 @@ const validateUserData = (data: RegisterUserData) => {
   }
 };
 
+// --- Gestion du Token JWT ---
+
+/**
+ * Décoder le payload JWT sans vérification
+ */
+const decodeJWT = (token: string): any => {
+  try {
+    const payload = token.split('.')[1];
+    const decoded = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
+    return JSON.parse(decoded);
+  } catch (error) {
+    console.error('❌ [UserService] Erreur décodage JWT:', error);
+    return null;
+  }
+};
+
+/**
+ * Vérifier si le token est expiré
+ */
+const isTokenExpired = (token: string): boolean => {
+  try {
+    const payload = decodeJWT(token);
+    if (!payload || !payload.exp) return true;
+    
+    const currentTime = Math.floor(Date.now() / 1000);
+    return payload.exp < currentTime;
+  } catch {
+    return true;
+  }
+};
+
+/**
+ * Extraire les informations utilisateur du token JWT
+ */
+const extractUserFromToken = (token: string, email: string): User => {
+  try {
+    const payload = decodeJWT(token);
+    
+    if (!payload) {
+      throw new UserServiceError('Token invalide', 'INVALID_TOKEN');
+    }
+
+    // Créer l'objet utilisateur à partir du payload JWT
+    const user: User = {
+      id: payload.id || payload.userId || 0,
+      email: payload.username || payload.email || email,
+      fullName: payload.fullName || payload.fullname || 'Utilisateur',
+      phone: payload.phone || '',
+      isVerified: payload.isVerified || false,
+      reputation: payload.reputation || 5.0,
+      roles: Array.isArray(payload.roles) ? payload.roles : 
+             (payload.roles ? [payload.roles] : ['ROLE_USER']),
+      createdAt: payload.createdAt || new Date().toISOString(),
+      isActive: payload.isActive !== undefined ? payload.isActive : true
+    };
+
+    console.log('👤 [UserService] Utilisateur extrait du token:', user.email);
+    return user;
+
+  } catch (error) {
+    console.error('❌ [UserService] Erreur extraction utilisateur du token:', error);
+    
+    // Fallback: utilisateur basique
+    return {
+      id: 0,
+      email: email,
+      fullName: 'Utilisateur',
+      phone: '',
+      isVerified: false,
+      reputation: 5.0,
+      roles: ['ROLE_USER'],
+      createdAt: new Date().toISOString(),
+      isActive: true
+    };
+  }
+};
+
 // --- Fonctions d'authentification ---
 
-// Connexion utilisateur
+/**
+ * Connexion utilisateur avec JWT (SOLUTION OPTIMISÉE)
+ */
 export const loginUser = async (email: string, password: string): Promise<LoginResponse> => {
   try {
-    console.log('🔐 Tentative de connexion...', { email });
+    console.log('🔐 [UserService] Tentative de connexion JWT...', { email });
 
-    let response;
-    
-    try {
-      // Route JWT standard (API Platform)
-      response = await api.post<LoginResponse>('/authentication_token', {
-        email,
-        password
-      });
-    } catch (jwtError) {
-      console.log('❌ Route JWT échouée, essai route login custom...');
-      // Route login custom
-      response = await api.post<LoginResponse>('/login', {
-        email,
-        password
-      });
+    // Étape 1: Obtenir le token JWT
+    const loginResponse = await api.post<{ token: string }>('/login_check', {
+      username: email,
+      password
+    });
+
+    console.log('✅ [UserService] Token JWT reçu');
+
+    const { token } = loginResponse.data;
+
+    if (!token) {
+      throw new UserServiceError('Token non reçu du serveur', 'NO_TOKEN');
     }
 
-    console.log('✅ Réponse connexion:', response.data);
+    // Vérifier que le token est valide
+    if (isTokenExpired(token)) {
+      throw new UserServiceError('Token expiré', 'TOKEN_EXPIRED');
+    }
 
-    const { token, user } = response.data;
+    // Étape 2: Extraire les données utilisateur du token
+    const user = extractUserFromToken(token, email);
+
+    // Étape 3: Tenter de récupérer les données complètes depuis l'API
+    let completeUser = user;
+    try {
+      console.log('🔍 [UserService] Tentative de récupération des données complètes...');
+      const userResponse = await api.get<User>('/users/me', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      completeUser = userResponse.data;
+      console.log('✅ [UserService] Données complètes récupérées');
+    } catch (apiError) {
+      console.warn('⚠️ [UserService] Endpoint /users/me non disponible, utilisation des données du token');
+      // On continue avec les données du token
+    }
 
     // Stocker dans localStorage
-    if (token) {
-      localStorage.setItem('authToken', token);
-    }
-    if (user) {
-      localStorage.setItem('currentUser', JSON.stringify(user));
-      localStorage.setItem('isAuthenticated', 'true');
-      localStorage.setItem('authTimestamp', Date.now().toString());
-    }
+    localStorage.setItem('authToken', token);
+    localStorage.setItem('currentUser', JSON.stringify(completeUser));
+    localStorage.setItem('isAuthenticated', 'true');
+    localStorage.setItem('authTimestamp', Date.now().toString());
 
-    return { token, user };
+    // Logs de vérification
+    console.log('💾 [UserService] Données sauvegardées:');
+    console.log('   - Token:', `PRÉSENT (${token.substring(0, 20)}...)`);
+    console.log('   - User:', completeUser.email);
+    console.log('   - Roles:', completeUser.roles);
+
+    return { token, user: completeUser };
 
   } catch (error: any) {
-    console.error('❌ Erreur de connexion:', error);
-
+    console.error('❌ [UserService] Erreur de connexion JWT:', error);
+    
+    // Nettoyage en cas d'erreur
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('currentUser');
+    localStorage.removeItem('isAuthenticated');
+    
     if (error.response?.status === 401) {
       throw new UserServiceError('Email ou mot de passe incorrect', 'UNAUTHORIZED', 401);
     }
-    if (error.response?.data?.['hydra:description']) {
-      throw new UserServiceError(error.response.data['hydra:description'], 'API_ERROR', error.response.status);
-    }
+    
     if (error.code === 'ERR_NETWORK') {
       throw new UserServiceError('Impossible de se connecter au serveur', 'NETWORK_ERROR');
     }
 
-    throw new UserServiceError('Erreur lors de la connexion', 'LOGIN_ERROR');
+    if (error instanceof UserServiceError) {
+      throw error;
+    }
+
+    throw new UserServiceError(
+      error.response?.data?.message || 'Erreur lors de la connexion', 
+      'LOGIN_ERROR', 
+      error.response?.status
+    );
   }
 };
 
-// Déconnexion utilisateur
+/**
+ * Déconnexion utilisateur
+ */
 export const logoutUser = (): void => {
+  console.log('👋 [UserService] Déconnexion utilisateur');
   localStorage.removeItem('authToken');
   localStorage.removeItem('currentUser');
   localStorage.removeItem('isAuthenticated');
   localStorage.removeItem('authTimestamp');
-  console.log('👋 Utilisateur déconnecté');
+  console.log('✅ [UserService] Données supprimées du localStorage');
 };
 
-// Récupérer l'utilisateur depuis l'API
-export const getCurrentUserFromAPI = async (): Promise<User> => {
+/**
+ * Récupérer l'utilisateur depuis le localStorage
+ */
+export const getCurrentUserFromStorage = (): User | null => {
   try {
-    const response = await api.get<User>('/users/me');
-    return response.data;
-  } catch (error: any) {
-    throw new UserServiceError('Impossible de récupérer l\'utilisateur', 'FETCH_ERROR', error.response?.status);
+    const userStr = localStorage.getItem('currentUser');
+    
+    if (!userStr) {
+      return null;
+    }
+
+    // Vérifications de sécurité
+    if (userStr === 'null' || userStr === 'undefined' || userStr.trim() === '') {
+      console.warn('⚠️ [UserService] Données utilisateur invalides, nettoyage...');
+      localStorage.removeItem('currentUser');
+      return null;
+    }
+
+    const user = JSON.parse(userStr);
+    
+    // Vérifier que l'utilisateur a une structure valide
+    if (!user || typeof user !== 'object' || !user.email) {
+      console.warn('⚠️ [UserService] Structure utilisateur invalide, nettoyage...');
+      localStorage.removeItem('currentUser');
+      return null;
+    }
+
+    console.log('🔍 [UserService] Utilisateur trouvé dans localStorage:', user.email);
+    return user;
+    
+  } catch (error) {
+    console.error('❌ [UserService] Erreur parsing user from localStorage:', error);
+    
+    // Nettoyage automatique en cas d'erreur
+    localStorage.removeItem('currentUser');
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('isAuthenticated');
+    
+    return null;
   }
 };
 
-// Récupérer l'utilisateur depuis le localStorage
-export const getCurrentUserFromStorage = (): User | null => {
+/**
+ * Récupérer l'utilisateur depuis l'API
+ */
+export const getCurrentUserFromAPI = async (): Promise<User> => {
   try {
-    const user = localStorage.getItem('currentUser');
-    return user ? JSON.parse(user) : null;
-  } catch (error) {
-    console.error('❌ Erreur parsing user from localStorage');
-    return null;
+    const token = localStorage.getItem('authToken');
+    if (!token) {
+      throw new UserServiceError('Token non disponible', 'NO_TOKEN');
+    }
+
+    console.log('🔍 [UserService] Récupération utilisateur depuis API...');
+    const response = await api.get<User>('/users/me', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    
+    console.log('✅ [UserService] Utilisateur récupéré depuis API:', response.data.email);
+    return response.data;
+  } catch (error: any) {
+    console.error('❌ [UserService] Erreur récupération utilisateur API:', error);
+    throw new UserServiceError(
+      'Impossible de récupérer l\'utilisateur', 
+      'FETCH_ERROR', 
+      error.response?.status
+    );
   }
 };
 
 // --- Fonctions utilisateur ---
 
-// Inscription utilisateur
+/**
+ * Inscription utilisateur
+ */
 export const registerUser = async (data: RegisterUserData): Promise<User> => {
   try {
+    console.log('📝 [UserService] Début inscription...');
     validateUserData(data);
 
     const payload = {
@@ -179,20 +345,30 @@ export const registerUser = async (data: RegisterUserData): Promise<User> => {
       reputation: 5.0,
     };
 
-    console.log('📤 Inscription:', { ...payload, plainPassword: '***' });
+    console.log('📤 [UserService] Envoi inscription...');
     const response = await api.post<User>('/users', payload);
-    console.log('✅ Inscription réussie:', response.data);
+    console.log('✅ [UserService] Inscription réussie:', response.data.email);
     
     return response.data;
   } catch (error: any) {
-    console.error('❌ Erreur inscription:', error);
+    console.error('❌ [UserService] Erreur inscription:', error);
     
     if (error.response?.data?.['hydra:description']) {
-      throw new UserServiceError(error.response.data['hydra:description'], 'API_ERROR', error.response.status);
+      throw new UserServiceError(
+        error.response.data['hydra:description'], 
+        'API_ERROR', 
+        error.response.status
+      );
     }
+    
     if (error.response?.data?.detail) {
-      throw new UserServiceError(error.response.data.detail, 'API_ERROR', error.response.status);
+      throw new UserServiceError(
+        error.response.data.detail, 
+        'API_ERROR', 
+        error.response.status
+      );
     }
+    
     if (error.code === 'ERR_NETWORK') {
       throw new UserServiceError('Impossible de se connecter au serveur', 'NETWORK_ERROR');
     }
@@ -201,46 +377,111 @@ export const registerUser = async (data: RegisterUserData): Promise<User> => {
   }
 };
 
-// Tester la connexion API
-export const testAPIConnection = async (): Promise<{ connected: boolean; message: string }> => {
+/**
+ * Vérifier si l'utilisateur est authentifié
+ */
+export const isAuthenticated = (): boolean => {
+  const token = localStorage.getItem('authToken');
+  const user = getCurrentUserFromStorage();
+  
+  if (!token || !user) {
+    return false;
+  }
+
+  // Vérifier que le token n'est pas expiré
+  if (isTokenExpired(token)) {
+    console.warn('⚠️ [UserService] Token expiré, déconnexion automatique');
+    logoutUser();
+    return false;
+  }
+
+  return true;
+};
+
+/**
+ * Récupérer le token d'authentification
+ */
+export const getAuthToken = (): string | null => {
+  const token = localStorage.getItem('authToken');
+  
+  if (token && isTokenExpired(token)) {
+    console.warn('⚠️ [UserService] Token expiré, suppression...');
+    logoutUser();
+    return null;
+  }
+  
+  return token;
+};
+
+/**
+ * Rafraîchir les données utilisateur
+ */
+export const refreshUserData = async (): Promise<User | null> => {
   try {
-    await api.get('/users', { timeout: 5000 });
-    return { connected: true, message: 'Serveur OK' };
-  } catch {
-    return { connected: false, message: 'Serveur non accessible' };
+    console.log('🔄 [UserService] Rafraîchissement données utilisateur...');
+    const user = await getCurrentUserFromAPI();
+    localStorage.setItem('currentUser', JSON.stringify(user));
+    console.log('✅ [UserService] Données utilisateur rafraîchies:', user.email);
+    return user;
+  } catch (error) {
+    console.error('❌ [UserService] Erreur rafraîchissement utilisateur:', error);
+    return null;
   }
 };
 
-// Récupérer tous les utilisateurs (pagination)
+// --- Fonctions supplémentaires ---
+
 export const getUsers = async (page = 1, itemsPerPage = 30): Promise<{ users: User[]; total: number }> => {
   try {
     const response = await api.get<{ 'hydra:member': User[]; 'hydra:totalItems': number }>(
       `/users?page=${page}&itemsPerPage=${itemsPerPage}`
     );
-    return { users: response.data['hydra:member'], total: response.data['hydra:totalItems'] };
+    
+    return { 
+      users: response.data['hydra:member'], 
+      total: response.data['hydra:totalItems'] 
+    };
   } catch (error: any) {
-    throw new UserServiceError('Impossible de récupérer les utilisateurs', 'FETCH_ERROR', error.response?.status);
+    throw new UserServiceError(
+      'Impossible de récupérer les utilisateurs', 
+      'FETCH_ERROR', 
+      error.response?.status
+    );
   }
 };
 
-// Récupérer un utilisateur par ID
 export const getUserById = async (id: number): Promise<User> => {
-  if (!id || id <= 0) throw new UserServiceError('ID invalide', 'INVALID_ID');
+  if (!id || id <= 0) {
+    throw new UserServiceError('ID invalide', 'INVALID_ID');
+  }
+  
   try {
     const response = await api.get<User>(`/users/${id}`);
     return response.data;
   } catch (error: any) {
-    if (error.response?.status === 404) throw new UserServiceError('Utilisateur non trouvé', 'NOT_FOUND', 404);
-    throw new UserServiceError('Impossible de récupérer l\'utilisateur', 'FETCH_ERROR', error.response?.status);
+    if (error.response?.status === 404) {
+      throw new UserServiceError('Utilisateur non trouvé', 'NOT_FOUND', 404);
+    }
+    throw new UserServiceError(
+      'Impossible de récupérer l\'utilisateur', 
+      'FETCH_ERROR', 
+      error.response?.status
+    );
   }
 };
 
-// Mettre à jour un utilisateur
 export const updateUser = async (id: number, data: UpdateUserData): Promise<User> => {
-  if (!id || id <= 0) throw new UserServiceError('ID invalide', 'INVALID_ID');
+  if (!id || id <= 0) {
+    throw new UserServiceError('ID invalide', 'INVALID_ID');
+  }
 
-  if (data.email && !validateEmail(data.email)) throw new UserServiceError('Email invalide');
-  if (data.phone && !validatePhone(data.phone)) throw new UserServiceError('Téléphone invalide');
+  if (data.email && !validateEmail(data.email)) {
+    throw new UserServiceError('Email invalide', 'VALIDATION_ERROR');
+  }
+  
+  if (data.phone && !validatePhone(data.phone)) {
+    throw new UserServiceError('Téléphone invalide', 'VALIDATION_ERROR');
+  }
 
   const payload: any = { ...data };
   if (payload.email) payload.email = payload.email.toLowerCase().trim();
@@ -251,57 +492,75 @@ export const updateUser = async (id: number, data: UpdateUserData): Promise<User
     const response = await api.put<User>(`/users/${id}`, payload);
     return response.data;
   } catch (error: any) {
-    if (error.response?.status === 404) throw new UserServiceError('Utilisateur non trouvé', 'NOT_FOUND', 404);
-    throw new UserServiceError('Impossible de mettre à jour l\'utilisateur', 'UPDATE_ERROR', error.response?.status);
+    if (error.response?.status === 404) {
+      throw new UserServiceError('Utilisateur non trouvé', 'NOT_FOUND', 404);
+    }
+    throw new UserServiceError(
+      'Impossible de mettre à jour l\'utilisateur', 
+      'UPDATE_ERROR', 
+      error.response?.status
+    );
   }
 };
 
-// Supprimer un utilisateur
 export const deleteUser = async (id: number): Promise<void> => {
-  if (!id || id <= 0) throw new UserServiceError('ID invalide', 'INVALID_ID');
+  if (!id || id <= 0) {
+    throw new UserServiceError('ID invalide', 'INVALID_ID');
+  }
 
   try {
     await api.delete(`/users/${id}`);
   } catch (error: any) {
-    if (error.response?.status === 404) throw new UserServiceError('Utilisateur non trouvé', 'NOT_FOUND', 404);
-    throw new UserServiceError('Impossible de supprimer l\'utilisateur', 'DELETE_ERROR', error.response?.status);
+    if (error.response?.status === 404) {
+      throw new UserServiceError('Utilisateur non trouvé', 'NOT_FOUND', 404);
+    }
+    throw new UserServiceError(
+      'Impossible de supprimer l\'utilisateur', 
+      'DELETE_ERROR', 
+      error.response?.status
+    );
   }
 };
 
-// Vérifier si un email existe
 export const checkEmailExists = async (email: string): Promise<boolean> => {
   if (!validateEmail(email)) return false;
+  
   try {
-    const response = await api.get<{ 'hydra:member': User[] }>(`/users?email=${encodeURIComponent(email.toLowerCase())}`);
+    const response = await api.get<{ 'hydra:member': User[] }>(
+      `/users?email=${encodeURIComponent(email.toLowerCase())}`
+    );
     return response.data['hydra:member'].length > 0;
   } catch {
     return false;
   }
 };
 
-// Rechercher utilisateur par nom
 export const searchUsersByName = async (query: string): Promise<User[]> => {
   if (!query || query.trim().length < 2) return [];
+  
   try {
-    const response = await api.get<{ 'hydra:member': User[] }>(`/users?fullName=${encodeURIComponent(query.trim())}`);
+    const response = await api.get<{ 'hydra:member': User[] }>(
+      `/users?fullName=${encodeURIComponent(query.trim())}`
+    );
     return response.data['hydra:member'];
   } catch {
     return [];
   }
 };
 
-// Vérifier si l'utilisateur est authentifié
-export const isAuthenticated = (): boolean => {
-  const token = localStorage.getItem('authToken');
-  const user = localStorage.getItem('currentUser');
-  return !!(token && user);
+/**
+ * Tester la connexion API
+ */
+export const testAPIConnection = async (): Promise<{ connected: boolean; message: string }> => {
+  try {
+    await api.get('/users', { timeout: 5000 });
+    return { connected: true, message: 'Serveur OK' };
+  } catch (error) {
+    return { connected: false, message: 'Serveur non accessible' };
+  }
 };
 
-// Récupérer le token d'authentification
-export const getAuthToken = (): string | null => {
-  return localStorage.getItem('authToken');
-};
-
+// Export par défaut pour la compatibilité
 export default {
   // Authentification
   loginUser,
@@ -310,6 +569,7 @@ export default {
   getCurrentUserFromStorage,
   isAuthenticated,
   getAuthToken,
+  refreshUserData,
   
   // Gestion utilisateurs
   registerUser,

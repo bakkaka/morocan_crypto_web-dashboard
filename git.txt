@@ -2,6 +2,7 @@ echo "# morocan_crypto_web-dashboard" >> README.md
 git init
 git add README.md
 git commit -m "first commit"
+git commit -m "configuration de base service securite"
 git branch -M main
 git remote add origin https://github.com/bakkaka/morocan_crypto_web-dashboard.git
 git push -u origin main
