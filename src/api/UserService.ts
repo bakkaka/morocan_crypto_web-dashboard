@@ -1,5 +1,5 @@
 // src/api/UserService.ts
-import axios from 'axios';
+import api from './axiosConfig';
 
 // --- Interfaces ---
 export interface User {
@@ -11,13 +11,25 @@ export interface User {
   isVerified: boolean;
   createdAt: string;
   updatedAt?: string;
+  roles?: string[];
+  isActive?: boolean;
 }
 
 export interface RegisterUserData {
   fullName: string;
   email: string;
   phone: string;
-  password: string; // correspond à plainPassword
+  password: string;
+}
+
+export interface LoginData {
+  email: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  token: string;
+  user: User;
 }
 
 export interface UpdateUserData {
@@ -63,14 +75,94 @@ const validateUserData = (data: RegisterUserData) => {
   }
 };
 
-// --- Axios instance ---
-const api = axios.create({
-  baseURL: 'http://localhost:8000/api', // adapter selon ton backend
-  headers: { 'Content-Type': 'application/json' },
-  timeout: 10000,
-});
+// --- Fonctions d'authentification ---
 
-// --- Fonctions API ---
+// Connexion utilisateur
+export const loginUser = async (email: string, password: string): Promise<LoginResponse> => {
+  try {
+    console.log('🔐 Tentative de connexion...', { email });
+
+    let response;
+    
+    try {
+      // Route JWT standard (API Platform)
+      response = await api.post<LoginResponse>('/authentication_token', {
+        email,
+        password
+      });
+    } catch (jwtError) {
+      console.log('❌ Route JWT échouée, essai route login custom...');
+      // Route login custom
+      response = await api.post<LoginResponse>('/login', {
+        email,
+        password
+      });
+    }
+
+    console.log('✅ Réponse connexion:', response.data);
+
+    const { token, user } = response.data;
+
+    // Stocker dans localStorage
+    if (token) {
+      localStorage.setItem('authToken', token);
+    }
+    if (user) {
+      localStorage.setItem('currentUser', JSON.stringify(user));
+      localStorage.setItem('isAuthenticated', 'true');
+      localStorage.setItem('authTimestamp', Date.now().toString());
+    }
+
+    return { token, user };
+
+  } catch (error: any) {
+    console.error('❌ Erreur de connexion:', error);
+
+    if (error.response?.status === 401) {
+      throw new UserServiceError('Email ou mot de passe incorrect', 'UNAUTHORIZED', 401);
+    }
+    if (error.response?.data?.['hydra:description']) {
+      throw new UserServiceError(error.response.data['hydra:description'], 'API_ERROR', error.response.status);
+    }
+    if (error.code === 'ERR_NETWORK') {
+      throw new UserServiceError('Impossible de se connecter au serveur', 'NETWORK_ERROR');
+    }
+
+    throw new UserServiceError('Erreur lors de la connexion', 'LOGIN_ERROR');
+  }
+};
+
+// Déconnexion utilisateur
+export const logoutUser = (): void => {
+  localStorage.removeItem('authToken');
+  localStorage.removeItem('currentUser');
+  localStorage.removeItem('isAuthenticated');
+  localStorage.removeItem('authTimestamp');
+  console.log('👋 Utilisateur déconnecté');
+};
+
+// Récupérer l'utilisateur depuis l'API
+export const getCurrentUserFromAPI = async (): Promise<User> => {
+  try {
+    const response = await api.get<User>('/users/me');
+    return response.data;
+  } catch (error: any) {
+    throw new UserServiceError('Impossible de récupérer l\'utilisateur', 'FETCH_ERROR', error.response?.status);
+  }
+};
+
+// Récupérer l'utilisateur depuis le localStorage
+export const getCurrentUserFromStorage = (): User | null => {
+  try {
+    const user = localStorage.getItem('currentUser');
+    return user ? JSON.parse(user) : null;
+  } catch (error) {
+    console.error('❌ Erreur parsing user from localStorage');
+    return null;
+  }
+};
+
+// --- Fonctions utilisateur ---
 
 // Inscription utilisateur
 export const registerUser = async (data: RegisterUserData): Promise<User> => {
@@ -84,16 +176,27 @@ export const registerUser = async (data: RegisterUserData): Promise<User> => {
       plainPassword: data.password,
       roles: ['ROLE_USER'],
       isVerified: false,
-      reputation: 5,
+      reputation: 5.0,
     };
 
+    console.log('📤 Inscription:', { ...payload, plainPassword: '***' });
     const response = await api.post<User>('/users', payload);
+    console.log('✅ Inscription réussie:', response.data);
+    
     return response.data;
   } catch (error: any) {
-    if (axios.isAxiosError(error) && error.response?.data?.message) {
-      throw new UserServiceError(error.response.data.message, 'API_ERROR', error.response.status, error.response.data);
+    console.error('❌ Erreur inscription:', error);
+    
+    if (error.response?.data?.['hydra:description']) {
+      throw new UserServiceError(error.response.data['hydra:description'], 'API_ERROR', error.response.status);
     }
-    if (error instanceof UserServiceError) throw error;
+    if (error.response?.data?.detail) {
+      throw new UserServiceError(error.response.data.detail, 'API_ERROR', error.response.status);
+    }
+    if (error.code === 'ERR_NETWORK') {
+      throw new UserServiceError('Impossible de se connecter au serveur', 'NETWORK_ERROR');
+    }
+    
     throw new UserServiceError('Erreur lors de l\'inscription', 'UNKNOWN_ERROR');
   }
 };
@@ -187,8 +290,28 @@ export const searchUsersByName = async (query: string): Promise<User[]> => {
   }
 };
 
-// --- Export par défaut ---
+// Vérifier si l'utilisateur est authentifié
+export const isAuthenticated = (): boolean => {
+  const token = localStorage.getItem('authToken');
+  const user = localStorage.getItem('currentUser');
+  return !!(token && user);
+};
+
+// Récupérer le token d'authentification
+export const getAuthToken = (): string | null => {
+  return localStorage.getItem('authToken');
+};
+
 export default {
+  // Authentification
+  loginUser,
+  logoutUser,
+  getCurrentUserFromAPI,
+  getCurrentUserFromStorage,
+  isAuthenticated,
+  getAuthToken,
+  
+  // Gestion utilisateurs
   registerUser,
   testAPIConnection,
   getUsers,
@@ -197,5 +320,7 @@ export default {
   deleteUser,
   checkEmailExists,
   searchUsersByName,
+  
+  // Erreurs
   UserServiceError,
 };

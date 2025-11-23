@@ -8,6 +8,8 @@ interface Currency {
   id: number;
   code: string;
   name: string;
+  decimals: number;
+  type?: 'crypto' | 'fiat'; // Optionnel pour compatibilité
 }
 
 interface PaymentMethod {
@@ -20,9 +22,9 @@ interface AdCreateData {
   type: 'buy' | 'sell';
   amount: number;
   price: number;
-  paymentMethod: string;
-  currency: string; // IRI format: "/api/currencies/1"
-  acceptedPaymentMethods: string[]; // Array of IRIs: ["/api/payment_methods/1", "/api/payment_methods/2"]
+  currency: string;
+  acceptedPaymentMethods: string[];
+  terms?: string;
 }
 
 const AdCreate: React.FC = () => {
@@ -39,51 +41,72 @@ const AdCreate: React.FC = () => {
     type: 'buy',
     amount: 0,
     price: 0,
-    paymentMethod: '',
     currency: '',
-    acceptedPaymentMethods: []
+    acceptedPaymentMethods: [],
+    terms: ''
   });
 
-  // Charger les données réelles depuis l'API
+  // Helper pour extraire les données de l'API Platform
+  const extractHydraMember = (data: any): any[] => {
+    if (data.member && Array.isArray(data.member)) {
+      return data.member;
+    } else if (data['hydra:member'] && Array.isArray(data['hydra:member'])) {
+      return data['hydra:member'];
+    } else if (Array.isArray(data)) {
+      return data;
+    }
+    return [];
+  };
+
+  // Filtrer les cryptos (solution sécurisée)
+  const getCryptoCurrencies = (): Currency[] => {
+    return currencies.filter(currency => {
+      // Si la propriété type existe, l'utiliser
+      if (currency.type !== undefined) {
+        return currency.type === 'crypto';
+      }
+      // Sinon, filtrer par codes connus des cryptos
+      return ['USDT', 'BTC', 'ETH'].includes(currency.code);
+    });
+  };
+
+  // Charger les données depuis l'API
   useEffect(() => {
     const loadFormData = async () => {
       try {
         setDataLoading(true);
+        setError(null);
+        
         console.log('🔄 Chargement des données depuis API...');
-        
-        // Charger les devises depuis l'API
-        const currenciesResponse = await api.get('/currencies');
-        console.log('📥 Réponse currencies:', currenciesResponse.data);
-        
-        let currenciesData = [];
-        if (currenciesResponse.data.member && Array.isArray(currenciesResponse.data.member)) {
-          currenciesData = currenciesResponse.data.member;
-        } else if (currenciesResponse.data['hydra:member'] && Array.isArray(currenciesResponse.data['hydra:member'])) {
-          currenciesData = currenciesResponse.data['hydra:member'];
-        } else if (Array.isArray(currenciesResponse.data)) {
-          currenciesData = currenciesResponse.data;
-        }
-        
-        setCurrencies(currenciesData);
-        console.log(`✅ ${currenciesData.length} devise(s) chargée(s)`);
 
-        // Charger les méthodes de paiement depuis l'API
-        const paymentMethodsResponse = await api.get('/payment_methods');
-        console.log('📥 Réponse payment_methods:', paymentMethodsResponse.data);
-        
-        let paymentMethodsData = [];
-        if (paymentMethodsResponse.data.member && Array.isArray(paymentMethodsResponse.data.member)) {
-          paymentMethodsData = paymentMethodsResponse.data.member;
-        } else if (paymentMethodsResponse.data['hydra:member'] && Array.isArray(paymentMethodsResponse.data['hydra:member'])) {
-          paymentMethodsData = paymentMethodsResponse.data['hydra:member'];
-        } else if (Array.isArray(paymentMethodsResponse.data)) {
-          paymentMethodsData = paymentMethodsResponse.data;
-        }
-        
+        // Chargement parallèle pour plus de performance
+        const [currenciesResponse, paymentMethodsResponse] = await Promise.all([
+          api.get('/currencies'),
+          api.get('/payment_methods')
+        ]);
+
+        const currenciesData = extractHydraMember(currenciesResponse.data);
+        const paymentMethodsData = extractHydraMember(paymentMethodsResponse.data);
+
+        console.log('📥 Devises chargées:', currenciesData);
+        console.log('📥 Méthodes de paiement chargées:', paymentMethodsData);
+
+        setCurrencies(currenciesData);
         setPaymentMethods(paymentMethodsData);
-        console.log(`✅ ${paymentMethodsData.length} méthode(s) de paiement chargée(s)`);
+
+        // Sélectionner USDT par défaut
+        const defaultCurrency = currenciesData.find((c: Currency) => 
+          c.code === 'USDT' || (c.type && c.type === 'crypto')
+        );
         
-      } catch (err) {
+        if (defaultCurrency && !formData.currency) {
+          setFormData(prev => ({
+            ...prev,
+            currency: `/api/currencies/${defaultCurrency.id}`
+          }));
+        }
+
+      } catch (err: any) {
         console.error('❌ Erreur lors du chargement des données:', err);
         setError('Impossible de charger les données nécessaires. Vérifiez la connexion API.');
       } finally {
@@ -95,10 +118,11 @@ const AdCreate: React.FC = () => {
   }, []);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
-    const { name, value } = e.target;
+    const { name, value, type } = e.target;
+    
     setFormData(prev => ({
       ...prev,
-      [name]: name === 'amount' || name === 'price' ? parseFloat(value) || 0 : value
+      [name]: type === 'number' ? parseFloat(value) || 0 : value
     }));
   };
 
@@ -119,6 +143,50 @@ const AdCreate: React.FC = () => {
     });
   };
 
+  // Calculer le montant total
+  const calculateTotal = (): number => {
+    return formData.amount * formData.price;
+  };
+
+  // Obtenir la devise sélectionnée
+  const getSelectedCurrency = (): Currency | undefined => {
+    return currencies.find(c => `/api/currencies/${c.id}` === formData.currency);
+  };
+
+  // Obtenir les méthodes de paiement sélectionnées
+  const getSelectedPaymentMethods = (): PaymentMethod[] => {
+    return paymentMethods.filter(method => 
+      formData.acceptedPaymentMethods.includes(`/api/payment_methods/${method.id}`)
+    );
+  };
+
+  // Valider le formulaire
+  const validateForm = (): string | null => {
+    if (!formData.currency) {
+      return 'Veuillez sélectionner une crypto-monnaie';
+    }
+
+    if (formData.acceptedPaymentMethods.length === 0) {
+      return 'Veuillez sélectionner au moins une méthode de paiement';
+    }
+
+    if (formData.amount <= 0) {
+      return formData.type === 'buy' 
+        ? 'Le montant à acheter doit être positif' 
+        : 'Le montant à vendre doit être positif';
+    }
+
+    if (formData.price <= 0) {
+      return 'Le prix doit être positif';
+    }
+
+    if (formData.amount < 10) {
+      return 'Le montant minimum est de 10 USDT';
+    }
+
+    return null;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -126,69 +194,112 @@ const AdCreate: React.FC = () => {
 
     try {
       // Validation
-      if (!formData.currency || formData.acceptedPaymentMethods.length === 0) {
-        throw new Error('Veuillez sélectionner une devise et au moins une méthode de paiement');
-      }
-
-      if (formData.amount <= 0 || formData.price <= 0) {
-        throw new Error('Les montants doivent être positifs');
-      }
-
-      if (!formData.paymentMethod.trim()) {
-        throw new Error('Veuillez saisir une méthode de paiement principale');
+      const validationError = validateForm();
+      if (validationError) {
+        throw new Error(validationError);
       }
 
       // Préparer les données pour l'API Platform
+      const selectedCurrency = getSelectedCurrency();
       const postData = {
         type: formData.type,
         amount: formData.amount,
         price: formData.price,
-        paymentMethod: formData.paymentMethod,
-        currency: formData.currency, // Déjà au format IRI
-        acceptedPaymentMethods: formData.acceptedPaymentMethods, // Déjà au format IRI
-        status: 'active'
+        currency: formData.currency,
+        acceptedPaymentMethods: formData.acceptedPaymentMethods,
+        paymentMethod: `Principal: ${getSelectedPaymentMethods()[0]?.name || 'Multiple méthodes'}`,
+        status: 'active',
+        terms: formData.terms || undefined
       };
 
       console.log('📤 Données envoyées à l\'API:', postData);
 
-      // Envoyer à l'API réelle
+      // Envoyer à l'API
       const response = await api.post('/ads', postData);
       console.log('✅ Réponse API:', response.data);
       
       if (response.status === 201) {
         console.log('🎉 Annonce créée avec succès!');
-        // Redirection vers la liste des annonces
         navigate('/dashboard/ads');
-      } else {
-        throw new Error(`Erreur API: ${response.status} ${response.statusText}`);
       }
       
     } catch (err: any) {
       console.error('❌ Erreur création annonce:', err);
-      
-      // Gestion détaillée des erreurs
-      if (err.response?.data) {
-        const apiError = err.response.data;
-        console.error('📋 Détails erreur API:', apiError);
-        
-        if (apiError.violations) {
-          // Erreurs de validation Symfony
-          const errorMessages = apiError.violations.map((v: any) => `${v.propertyPath}: ${v.message}`).join(', ');
-          setError(`Erreurs de validation: ${errorMessages}`);
-        } else if (apiError.detail) {
-          setError(apiError.detail);
-        } else if (apiError.message) {
-          setError(apiError.message);
-        } else {
-          setError('Erreur lors de la création de l\'annonce');
-        }
-      } else {
-        setError(err.message || 'Une erreur est survenue lors de la création');
-      }
+      handleApiError(err);
     } finally {
       setLoading(false);
     }
   };
+
+  const handleApiError = (err: any) => {
+    if (err.response?.data) {
+      const apiError = err.response.data;
+      console.error('📋 Détails erreur API:', apiError);
+      
+      if (apiError.violations) {
+        const errorMessages = apiError.violations.map((v: any) => `${v.propertyPath}: ${v.message}`).join(', ');
+        setError(`Erreurs de validation: ${errorMessages}`);
+      } else if (apiError.detail) {
+        setError(apiError.detail);
+      } else if (apiError.message) {
+        setError(apiError.message);
+      } else {
+        setError('Erreur lors de la création de l\'annonce');
+      }
+    } else {
+      setError(err.message || 'Une erreur est survenue lors de la création');
+    }
+  };
+
+  // Rendu conditionnel pour les méthodes de paiement
+  const renderPaymentMethods = () => {
+    if (dataLoading) {
+      return (
+        <div className="text-center text-muted py-3">
+          <div className="spinner-border spinner-border-sm me-2"></div>
+          Chargement des méthodes de paiement...
+        </div>
+      );
+    }
+
+    if (paymentMethods.length === 0) {
+      return (
+        <div className="text-center text-warning py-3">
+          <i className="bi bi-exclamation-triangle me-2"></i>
+          Aucune méthode de paiement disponible
+        </div>
+      );
+    }
+
+    return (
+      <div className="row">
+        {paymentMethods.map(method => (
+          <div key={method.id} className="col-md-6 mb-2">
+            <div className="form-check">
+              <input
+                className="form-check-input"
+                type="checkbox"
+                id={`method-${method.id}`}
+                checked={formData.acceptedPaymentMethods.includes(`/api/payment_methods/${method.id}`)}
+                onChange={() => handlePaymentMethodToggle(`/api/payment_methods/${method.id}`)}
+                disabled={loading}
+              />
+              <label className="form-check-label" htmlFor={`method-${method.id}`}>
+                <strong>{method.name}</strong>
+                {method.details && (
+                  <small className="text-muted d-block">{method.details}</small>
+                )}
+              </label>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const cryptoCurrencies = getCryptoCurrencies();
+  const selectedCurrency = getSelectedCurrency();
+  const selectedPaymentMethods = getSelectedPaymentMethods();
 
   return (
     <div className="container">
@@ -198,12 +309,18 @@ const AdCreate: React.FC = () => {
           <div className="d-flex justify-content-between align-items-center mb-4">
             <div>
               <h1 className="h2 mb-1">Créer une annonce</h1>
-              <p className="text-muted">Publiez votre offre d'achat ou de vente</p>
+              <p className="text-muted">
+                {formData.type === 'buy' 
+                  ? 'Publiez votre demande d\'achat' 
+                  : 'Publiez votre offre de vente'
+                }
+              </p>
             </div>
             <button 
               type="button" 
               className="btn btn-outline-secondary"
               onClick={() => navigate('/dashboard/ads')}
+              disabled={loading}
             >
               <i className="bi bi-arrow-left me-2"></i>
               Retour
@@ -214,10 +331,12 @@ const AdCreate: React.FC = () => {
           <div className="card">
             <div className="card-body">
               {error && (
-                <div className="alert alert-danger" role="alert">
-                  <i className="bi bi-exclamation-triangle me-2"></i>
-                  <strong>Erreur</strong>
-                  <div className="mt-1">{error}</div>
+                <div className="alert alert-danger d-flex align-items-center" role="alert">
+                  <i className="bi bi-exclamation-triangle me-2 fs-5"></i>
+                  <div>
+                    <strong>Erreur</strong>
+                    <div className="mt-1">{error}</div>
+                  </div>
                 </div>
               )}
 
@@ -231,6 +350,7 @@ const AdCreate: React.FC = () => {
                         type="button"
                         className={`btn btn-lg flex-fill ${formData.type === 'buy' ? 'btn-success' : 'btn-outline-success'}`}
                         onClick={() => setFormData(prev => ({ ...prev, type: 'buy' }))}
+                        disabled={loading}
                       >
                         <i className="bi bi-arrow-down-circle me-2"></i>
                         Je veux ACHETER
@@ -239,6 +359,7 @@ const AdCreate: React.FC = () => {
                         type="button"
                         className={`btn btn-lg flex-fill ${formData.type === 'sell' ? 'btn-danger' : 'btn-outline-danger'}`}
                         onClick={() => setFormData(prev => ({ ...prev, type: 'sell' }))}
+                        disabled={loading}
                       >
                         <i className="bi bi-arrow-up-circle me-2"></i>
                         Je veux VENDRE
@@ -247,11 +368,74 @@ const AdCreate: React.FC = () => {
                   </div>
                 </div>
 
+                {/* Résumé de l'annonce */}
+                {formData.amount > 0 && formData.price > 0 && (
+                  <div className={`alert ${formData.type === 'buy' ? 'alert-success' : 'alert-danger'} mb-4`}>
+                    <div className="d-flex justify-content-between align-items-center">
+                      <div>
+                        <strong>
+                          {formData.type === 'buy' ? '🛒 Vous voulez ACHETER' : '💰 Vous voulez VENDRE'}
+                        </strong>
+                        <div className="mt-1">
+                          <strong>{formData.amount} {selectedCurrency?.code || 'USDT'}</strong> 
+                          {' à '}
+                          <strong>{formData.price} MAD/{selectedCurrency?.code || 'USDT'}</strong>
+                          <br />
+                          <span className="text-muted">
+                            Total: <strong>{calculateTotal().toFixed(2)} MAD</strong>
+                          </span>
+                        </div>
+                      </div>
+                      {selectedPaymentMethods.length > 0 && (
+                        <div className="text-end">
+                          <small className="text-muted">
+                            {selectedPaymentMethods.length} méthode(s) sélectionnée(s)
+                          </small>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Crypto à échanger */}
+                <div className="mb-3">
+                  <label htmlFor="currency" className="form-label">
+                    Crypto-monnaie à échanger *
+                  </label>
+                  <select
+                    className="form-select"
+                    id="currency"
+                    name="currency"
+                    value={formData.currency}
+                    onChange={handleInputChange}
+                    required
+                    disabled={dataLoading || loading}
+                  >
+                    <option value="">
+                      {dataLoading ? 'Chargement...' : 'Sélectionnez une crypto-monnaie'}
+                    </option>
+                    {cryptoCurrencies.map(currency => (
+                      <option key={currency.id} value={`/api/currencies/${currency.id}`}>
+                        {currency.name} ({currency.code})
+                      </option>
+                    ))}
+                  </select>
+                  {cryptoCurrencies.length === 0 && !dataLoading && (
+                    <div className="alert alert-warning mt-2 py-2">
+                      <i className="bi bi-exclamation-triangle me-2"></i>
+                      Aucune crypto-monnaie disponible
+                    </div>
+                  )}
+                  <div className="form-text">
+                    Choisissez la crypto-monnaie que vous voulez acheter ou vendre
+                  </div>
+                </div>
+
                 {/* Montant et Prix */}
                 <div className="row">
                   <div className="col-md-6 mb-3">
                     <label htmlFor="amount" className="form-label">
-                      Montant disponible *
+                      {formData.type === 'buy' ? 'Montant à acheter *' : 'Montant à vendre *'}
                     </label>
                     <input
                       type="number"
@@ -260,13 +444,17 @@ const AdCreate: React.FC = () => {
                       name="amount"
                       value={formData.amount}
                       onChange={handleInputChange}
-                      step="0.01"
-                      min="0"
-                      placeholder="1000"
+                      step="0.000001"
+                      min="10"
+                      placeholder={formData.type === 'buy' ? "1000" : "500"}
                       required
+                      disabled={loading}
                     />
                     <div className="form-text">
-                      Quantité totale disponible
+                      {formData.type === 'buy' 
+                        ? `Quantité de ${selectedCurrency?.code || 'crypto'} que vous souhaitez acheter (min: 10)` 
+                        : `Quantité de ${selectedCurrency?.code || 'crypto'} que vous mettez en vente (min: 10)`
+                      }
                     </div>
                   </div>
 
@@ -282,109 +470,73 @@ const AdCreate: React.FC = () => {
                       value={formData.price}
                       onChange={handleInputChange}
                       step="0.01"
-                      min="0"
+                      min="0.01"
                       placeholder="10.50"
                       required
+                      disabled={loading}
                     />
                     <div className="form-text">
-                      Prix en dirhams par unité
+                      Prix en dirhams marocains par unité de {selectedCurrency?.code || 'crypto'}
                     </div>
                   </div>
                 </div>
 
-                {/* Devise */}
-                <div className="mb-3">
-                  <label htmlFor="currency" className="form-label">
-                    Devise de transaction *
-                  </label>
-                  <select
-                    className="form-select"
-                    id="currency"
-                    name="currency"
-                    value={formData.currency}
-                    onChange={handleInputChange}
-                    required
-                    disabled={dataLoading}
-                  >
-                    <option value="">{dataLoading ? 'Chargement...' : 'Sélectionnez une devise'}</option>
-                    {currencies.map(currency => (
-                      <option key={currency.id} value={`/api/currencies/${currency.id}`}>
-                        {currency.name} ({currency.code})
-                      </option>
-                    ))}
-                  </select>
-                  {currencies.length === 0 && !dataLoading && (
-                    <div className="text-warning small mt-1">
-                      Aucune devise disponible. Vérifiez votre base de données.
+                {/* Calcul automatique du total */}
+                {formData.amount > 0 && formData.price > 0 && (
+                  <div className="alert alert-info mb-3">
+                    <div className="row">
+                      <div className="col-6">
+                        <strong>Montant total:</strong>
+                      </div>
+                      <div className="col-6 text-end">
+                        <strong className="text-primary fs-5">
+                          {calculateTotal().toFixed(2)} MAD
+                        </strong>
+                      </div>
                     </div>
-                  )}
-                </div>
-
-                {/* Méthode de paiement principale */}
-                <div className="mb-3">
-                  <label htmlFor="paymentMethod" className="form-label">
-                    Méthode de paiement principale *
-                  </label>
-                  <input
-                    type="text"
-                    className="form-control"
-                    id="paymentMethod"
-                    name="paymentMethod"
-                    value={formData.paymentMethod}
-                    onChange={handleInputChange}
-                    placeholder="Ex: Virement CIH, Cash Casablanca, PayPal..."
-                    required
-                  />
-                  <div className="form-text">
-                    Décrivez votre méthode de paiement préférée
+                    <small className="text-muted">
+                      {formData.amount} {selectedCurrency?.code || 'USDT'} × {formData.price} MAD
+                    </small>
                   </div>
-                </div>
+                )}
 
                 {/* Méthodes de paiement acceptées */}
                 <div className="mb-4">
                   <label className="form-label">
-                    Méthodes de paiement acceptées *
+                    {formData.type === 'buy' 
+                      ? 'Méthodes de paiement que vous utiliserez *' 
+                      : 'Méthodes de paiement que vous acceptez *'
+                    }
                   </label>
                   <div className="border rounded p-3">
-                    {dataLoading ? (
-                      <div className="text-center text-muted py-3">
-                        <div className="spinner-border spinner-border-sm me-2"></div>
-                        Chargement des méthodes de paiement...
-                      </div>
-                    ) : paymentMethods.length === 0 ? (
-                      <div className="text-center text-warning py-3">
-                        <i className="bi bi-exclamation-triangle me-2"></i>
-                        Aucune méthode de paiement disponible
-                      </div>
-                    ) : (
-                      <div className="row">
-                        {paymentMethods.map(method => (
-                          <div key={method.id} className="col-md-6 mb-2">
-                            <div className="form-check">
-                              <input
-                                className="form-check-input"
-                                type="checkbox"
-                                id={`method-${method.id}`}
-                                checked={formData.acceptedPaymentMethods.includes(`/api/payment_methods/${method.id}`)}
-                                onChange={() => handlePaymentMethodToggle(`/api/payment_methods/${method.id}`)}
-                              />
-                              <label className="form-check-label" htmlFor={`method-${method.id}`}>
-                                <strong>{method.name}</strong>
-                                {method.details && (
-                                  <small className="text-muted d-block">{method.details}</small>
-                                )}
-                              </label>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    {renderPaymentMethods()}
                   </div>
                   {formData.acceptedPaymentMethods.length === 0 && !dataLoading && paymentMethods.length > 0 && (
                     <div className="text-danger small mt-2">
+                      <i className="bi bi-exclamation-circle me-1"></i>
                       Veuillez sélectionner au moins une méthode de paiement
                     </div>
                   )}
+                </div>
+
+                {/* Conditions supplémentaires */}
+                <div className="mb-4">
+                  <label htmlFor="terms" className="form-label">
+                    Conditions supplémentaires (optionnel)
+                  </label>
+                  <textarea
+                    className="form-control"
+                    id="terms"
+                    name="terms"
+                    value={formData.terms}
+                    onChange={handleInputChange}
+                    placeholder="Ex: Disponible de 9h à 18h, transfert immédiat requis, limite par transaction..."
+                    rows={3}
+                    disabled={loading}
+                  />
+                  <div className="form-text">
+                    Précisez vos conditions particulières (horaires, délais, limites, etc.)
+                  </div>
                 </div>
 
                 {/* Boutons de soumission */}
@@ -400,7 +552,7 @@ const AdCreate: React.FC = () => {
                   <button
                     type="submit"
                     className="btn btn-primary"
-                    disabled={loading || !formData.currency || formData.acceptedPaymentMethods.length === 0 || !formData.paymentMethod.trim() || dataLoading}
+                    disabled={loading || !formData.currency || formData.acceptedPaymentMethods.length === 0 || formData.amount < 10 || formData.price <= 0 || dataLoading}
                   >
                     {loading ? (
                       <>
@@ -410,12 +562,29 @@ const AdCreate: React.FC = () => {
                     ) : (
                       <>
                         <i className="bi bi-check-circle me-2"></i>
-                        Créer l'annonce
+                        {formData.type === 'buy' ? 'Publier la demande' : 'Publier l\'offre'}
                       </>
                     )}
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+
+          {/* Informations importantes */}
+          <div className="card mt-4 bg-light">
+            <div className="card-body">
+              <h6 className="card-title">
+                <i className="bi bi-info-circle me-2"></i>
+                Informations importantes
+              </h6>
+              <ul className="small mb-0">
+                <li>Votre annonce sera visible par tous les utilisateurs de la plateforme</li>
+                <li>Le montant minimum est de 10 USDT (ou équivalent)</li>
+                <li>Vous pouvez mettre en pause votre annonce à tout moment</li>
+                <li>Les transactions sont sécurisées par notre système</li>
+                <li>Respectez les lois marocaines concernant les transactions financières</li>
+              </ul>
             </div>
           </div>
         </div>
