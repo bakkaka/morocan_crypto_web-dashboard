@@ -97,6 +97,7 @@ const Dashboard: React.FC = () => {
             </div>
 
             <div className="navbar-nav align-items-center flex-row">
+              {/* Lien Profil */}
               <Link 
                 className={`nav-link mx-2 ${isActiveLink('/dashboard/profile') ? 'active' : ''}`} 
                 to="/dashboard/profile"
@@ -105,53 +106,63 @@ const Dashboard: React.FC = () => {
                 Profil
               </Link>
               
-              <div className="dropdown ms-3">
-                <button 
-                  className="btn btn-outline-light dropdown-toggle d-flex align-items-center" 
-                  type="button" 
-                  data-bs-toggle="dropdown"
+              {/* Affichage du nom d'utilisateur TOUJOURS visible */}
+              <div className="d-flex align-items-center ms-3">
+                {/* Avatar avec initiale */}
+                <div 
+                  className="bg-white text-primary rounded-circle d-flex align-items-center justify-content-center me-2" 
+                  style={{width: '32px', height: '32px', flexShrink: 0}}
                 >
-                  <div 
-                    className="bg-white text-primary rounded-circle d-flex align-items-center justify-content-center me-2" 
-                    style={{width: '32px', height: '32px'}}
+                  <span className="fw-bold small">{user.fullName.charAt(0)}</span>
+                </div>
+                
+                {/* Nom d'utilisateur - visible sur desktop, caché sur mobile */}
+                <div className="d-none d-md-block text-start me-3">
+                  <div className="small text-white fw-bold">{user.fullName}</div>
+                  <div className="x-small text-white-50">
+                    {isAdmin ? 'Administrateur' : 'Utilisateur'}
+                  </div>
+                </div>
+                
+                {/* Dropdown pour les actions */}
+                <div className="dropdown">
+                  <button 
+                    className="btn btn-outline-light dropdown-toggle" 
+                    type="button" 
+                    data-bs-toggle="dropdown"
+                    style={{padding: '6px 12px'}}
                   >
-                    <span className="fw-bold small">{user.fullName.charAt(0)}</span>
-                  </div>
-                  <div className="text-start">
-                    <div className="small">{user.fullName}</div>
-                    <div className="x-small opacity-75">
-                      {isAdmin ? 'Administrateur' : 'Utilisateur'}
-                    </div>
-                  </div>
-                </button>
-                <ul className="dropdown-menu dropdown-menu-end">
-                  <li>
-                    <span className="dropdown-item-text small">
-                      <strong>{user.fullName}</strong>
-                    </span>
-                    <span className="dropdown-item-text small text-muted">
-                      {user.email}
-                    </span>
-                    {user.roles && (
-                      <span className="dropdown-item-text small text-muted">
-                        Rôle: {isAdmin ? 'Administrateur' : 'Utilisateur'}
+                    <i className="bi bi-chevron-down"></i>
+                  </button>
+                  <ul className="dropdown-menu dropdown-menu-end">
+                    <li>
+                      <span className="dropdown-item-text small">
+                        <strong>{user.fullName}</strong>
                       </span>
-                    )}
-                  </li>
-                  <li><hr className="dropdown-divider" /></li>
-                  <li>
-                    <Link className="dropdown-item" to="/dashboard/profile">
-                      <i className="bi bi-person me-2"></i>
-                      Mon Profil
-                    </Link>
-                  </li>
-                  <li>
-                    <button className="dropdown-item text-danger" onClick={logout}>
-                      <i className="bi bi-box-arrow-right me-2"></i>
-                      Déconnexion
-                    </button>
-                  </li>
-                </ul>
+                      <span className="dropdown-item-text small text-muted">
+                        {user.email}
+                      </span>
+                      {user.roles && (
+                        <span className="dropdown-item-text small text-muted">
+                          Rôle: {isAdmin ? 'Administrateur' : 'Utilisateur'}
+                        </span>
+                      )}
+                    </li>
+                    <li><hr className="dropdown-divider" /></li>
+                    <li>
+                      <Link className="dropdown-item" to="/dashboard/profile">
+                        <i className="bi bi-person me-2"></i>
+                        Mon Profil
+                      </Link>
+                    </li>
+                    <li>
+                      <button className="dropdown-item text-danger" onClick={logout}>
+                        <i className="bi bi-box-arrow-right me-2"></i>
+                        Déconnexion
+                      </button>
+                    </li>
+                  </ul>
+                </div>
               </div>
             </div>
           </div>

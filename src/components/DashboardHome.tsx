@@ -5,184 +5,97 @@ import { useAuth } from '../contexts/AuthContext';
 const DashboardHome: React.FC = () => {
   const { user, isAdmin, isUser } = useAuth();
 
-  // Statistiques différentes selon le rôle
-  const getUserStats = () => {
-    if (isAdmin) {
-      return [
-        { 
-          title: 'Utilisateurs Total', 
-          value: '156', 
-          icon: 'bi-people', 
-          color: 'primary',
-          link: '/dashboard/users',
-          btnText: 'Gérer'
-        },
-        { 
-          title: 'Annonces Actives', 
-          value: '47', 
-          icon: 'bi-megaphone', 
-          color: 'success',
-          link: '/dashboard/ads',
-          btnText: 'Voir'
-        },
-        { 
-          title: 'Transactions Today', 
-          value: '12', 
-          icon: 'bi-arrow-left-right', 
-          color: 'info',
-          link: '/dashboard/transactions',
-          btnText: 'Analyser'
-        },
-        { 
-          title: 'Revenus Journaliers', 
-          value: '2,450 MAD', 
-          icon: 'bi-graph-up', 
-          color: 'warning',
-          link: '/dashboard/transactions',
-          btnText: 'Détails'
-        }
-      ];
-    } else {
-      return [
-        { 
-          title: 'Mes Annonces', 
-          value: '4', 
-          icon: 'bi-megaphone', 
-          color: 'primary',
-          link: '/dashboard/ads',
-          btnText: 'Gérer'
-        },
-        { 
-          title: 'Transactions', 
-          value: '0', 
-          icon: 'bi-arrow-left-right', 
-          color: 'success',
-          link: '/dashboard/transactions',
-          btnText: 'Voir'
-        },
-        { 
-          title: 'Solde USDT', 
-          value: '0.00', 
-          icon: 'bi-wallet2', 
-          color: 'warning',
-          link: '/dashboard/profile',
-          btnText: 'Recharger'
-        },
-        { 
-          title: 'Rating', 
-          value: '⭐ 5.0', 
-          icon: 'bi-star', 
-          color: 'info',
-          link: '/dashboard/profile',
-          btnText: 'Profil'
-        }
-      ];
+  // Statistiques pour les users
+  const getUserStats = () => [
+    { 
+      title: 'Mes Annonces', 
+      value: '3', 
+      icon: 'bi-megaphone', 
+      color: 'primary',
+      link: '/dashboard/ads/my'
+    },
+    { 
+      title: 'Solde USDT', 
+      value: '0.00', 
+      icon: 'bi-wallet2', 
+      color: 'success',
+      link: '/dashboard/wallet'
+    },
+    { 
+      title: 'Transactions', 
+      value: '0', 
+      icon: 'bi-arrow-left-right', 
+      color: 'info',
+      link: '/dashboard/transactions'
+    },
+    { 
+      title: 'Rating', 
+      value: '⭐ 5.0', 
+      icon: 'bi-star', 
+      color: 'warning',
+      link: '/dashboard/profile'
     }
-  };
+  ];
 
-  const getQuickActions = () => {
-    if (isAdmin) {
-      return [
-        {
-          title: 'Gestion Utilisateurs',
-          description: 'Gérer tous les utilisateurs de la plateforme',
-          icon: 'bi-people',
-          color: 'primary',
-          link: '/dashboard/users'
-        },
-        {
-          title: 'Modération Annonces',
-          description: 'Modérer les annonces et signalements',
-          icon: 'bi-shield-check',
-          color: 'success',
-          link: '/dashboard/ads'
-        },
-        {
-          title: 'Analytics',
-          description: 'Statistiques et analyses de la plateforme',
-          icon: 'bi-graph-up',
-          color: 'info',
-          link: '/dashboard/transactions'
-        },
-        {
-          title: 'Paramètres Système',
-          description: 'Configuration de la plateforme',
-          icon: 'bi-gear',
-          color: 'warning',
-          link: '/dashboard/profile'
-        }
-      ];
-    } else {
-      return [
-        {
-          title: 'Créer Annonce',
-          description: 'Publier une nouvelle offre d\'achat/vente',
-          icon: 'bi-plus-circle',
-          color: 'primary',
-          link: '/dashboard/ads/create'
-        },
-        {
-          title: 'Mes Transactions',
-          description: 'Historique de vos échanges',
-          icon: 'bi-arrow-left-right',
-          color: 'success',
-          link: '/dashboard/transactions'
-        },
-        {
-          title: 'Mon Profil',
-          description: 'Gérer vos informations personnelles',
-          icon: 'bi-person',
-          color: 'info',
-          link: '/dashboard/profile'
-        },
-        {
-          title: 'Portefeuille',
-          description: 'Gérer votre solde et paiements',
-          icon: 'bi-wallet2',
-          color: 'warning',
-          link: '/dashboard/profile'
-        }
-      ];
+  // Statistiques pour les admins
+  const getAdminStats = () => [
+    { 
+      title: 'Utilisateurs', 
+      value: '156', 
+      icon: 'bi-people', 
+      color: 'primary',
+      link: '/dashboard/admin/users'
+    },
+    { 
+      title: 'Annonces', 
+      value: '47', 
+      icon: 'bi-megaphone', 
+      color: 'success',
+      link: '/dashboard/admin/ads'
+    },
+    { 
+      title: 'Transactions', 
+      value: '24', 
+      icon: 'bi-arrow-left-right', 
+      color: 'info',
+      link: '/dashboard/transactions'
+    },
+    { 
+      title: 'Revenus', 
+      value: '2,450 MAD', 
+      icon: 'bi-graph-up', 
+      color: 'warning',
+      link: '/dashboard/admin/analytics'
     }
-  };
+  ];
 
-  const stats = getUserStats();
-  const quickActions = getQuickActions();
+  const stats = isAdmin ? getAdminStats() : getUserStats();
 
   return (
-    <div>
-      {/* En-tête personnalisé selon le rôle */}
-      <div className="row mb-5">
+    <div className="container-fluid py-4">
+      {/* En-tête personnalisé */}
+      <div className="row mb-4">
         <div className="col-12">
           <div className={`card ${isAdmin ? 'bg-dark text-white' : 'bg-primary text-white'}`}>
-            <div className="card-body">
+            <div className="card-body py-4">
               <div className="row align-items-center">
                 <div className="col-md-8">
-                  <h1 className="h2 mb-2">
-                    Bonjour, {user?.fullName} 
-                    {isAdmin ? ' 🛡️' : ' 👋'}
+                  <h1 className="h3 mb-2">
+                    {isAdmin ? '🛡️ Tableau de Bord Administrateur' : `👋 Bonjour, ${user?.fullName}`}
                   </h1>
                   <p className="mb-0 opacity-75">
                     {isAdmin 
-                      ? 'Tableau de bord Administrateur - Supervision complète' 
-                      : 'Tableau de bord - Vue d\'ensemble de vos activités'
+                      ? 'Supervision complète de la plateforme' 
+                      : 'Bienvenue sur votre espace personnel de trading'
                     }
                   </p>
-                  {isAdmin && (
-                    <div className="mt-2">
-                      <span className="badge bg-warning text-dark">
-                        <i className="bi bi-shield-check me-1"></i>
-                        Accès Administrateur Complet
-                      </span>
-                    </div>
-                  )}
                 </div>
                 <div className="col-md-4 text-end">
                   <div 
                     className={`rounded-circle d-inline-flex align-items-center justify-content-center ${
                       isAdmin ? 'bg-warning text-dark' : 'bg-white text-primary'
                     }`} 
-                    style={{width: '80px', height: '80px', fontSize: '32px'}}
+                    style={{width: '60px', height: '60px', fontSize: '24px'}}
                   >
                     {user?.fullName?.charAt(0) || 'U'}
                   </div>
@@ -193,103 +106,131 @@ const DashboardHome: React.FC = () => {
         </div>
       </div>
 
-      {/* Statistiques selon le rôle */}
+      {/* Section Statistiques */}
       <div className="row mb-5">
-        {stats.map((stat, index) => (
-          <div key={index} className="col-md-3 mb-4">
-            <div className={`card border-${stat.color} shadow-sm h-100`}>
-              <div className="card-body text-center">
-                <div className={`text-${stat.color} mb-3`}>
-                  <i className={`bi ${stat.icon} fs-1`}></i>
-                </div>
-                <h3 className={`card-title text-${stat.color}`}>{stat.value}</h3>
-                <p className="card-text">{stat.title}</p>
-                <Link to={stat.link} className={`btn btn-${stat.color} btn-sm`}>
-                  {stat.btnText}
+        <div className="col-12">
+          <h2 className="h4 mb-4">
+            <i className="bi bi-graph-up me-2"></i>
+            {isAdmin ? 'Aperçu de la Plateforme' : 'Mes Statistiques'}
+          </h2>
+          <div className="row">
+            {stats.map((stat, index) => (
+              <div key={index} className="col-xl-3 col-md-6 mb-4">
+                <Link to={stat.link} className="text-decoration-none">
+                  <div className={`card border-${stat.color} shadow-sm h-100 hover-lift`}>
+                    <div className="card-body text-center">
+                      <div className={`text-${stat.color} mb-3`}>
+                        <i className={`bi ${stat.icon} fs-1`}></i>
+                      </div>
+                      <h3 className={`card-title text-${stat.color}`}>{stat.value}</h3>
+                      <p className="card-text text-dark">{stat.title}</p>
+                    </div>
+                  </div>
                 </Link>
               </div>
-            </div>
+            ))}
           </div>
-        ))}
+        </div>
       </div>
 
-      {/* Navigation rapide selon le rôle */}
+      {/* Section Actions Rapides */}
       <div className="row">
         <div className="col-12">
-          <div className="card">
-            <div className="card-header">
-              <h5 className="card-title mb-0">
+          <div className="card shadow-sm">
+            <div className="card-header bg-light">
+              <h3 className="card-title mb-0">
                 <i className="bi bi-lightning me-2"></i>
-                {isAdmin ? 'Actions Rapides Admin' : 'Actions Rapides'}
-              </h5>
+                {isAdmin ? 'Actions Administratives' : 'Actions Rapides'}
+              </h3>
             </div>
             <div className="card-body">
-              <div className="row g-3">
-                {quickActions.map((action, index) => (
-                  <div key={index} className="col-md-3">
-                    <Link 
-                      to={action.link} 
-                      className={`btn btn-outline-${action.color} w-100 py-3 text-start h-100`}
-                    >
-                      <i className={`bi ${action.icon} fs-2 mb-2 d-block`}></i>
-                      <strong>{action.title}</strong>
-                      <small className="text-muted d-block">{action.description}</small>
+              {isAdmin ? (
+                // Actions Admin
+                <div className="row g-3">
+                  <div className="col-md-3">
+                    <Link to="/dashboard/admin/users" className="btn btn-outline-primary w-100 py-3 text-start">
+                      <i className="bi bi-people fs-2 d-block mb-2"></i>
+                      <strong>Gérer Utilisateurs</strong>
+                      <small className="text-muted d-block">Modération des comptes</small>
                     </Link>
                   </div>
-                ))}
-              </div>
+                  <div className="col-md-3">
+                    <Link to="/dashboard/admin/ads" className="btn btn-outline-success w-100 py-3 text-start">
+                      <i className="bi bi-shield-check fs-2 d-block mb-2"></i>
+                      <strong>Modérer Annonces</strong>
+                      <small className="text-muted d-block">Validation contenu</small>
+                    </Link>
+                  </div>
+                  <div className="col-md-3">
+                    <Link to="/dashboard/admin/analytics" className="btn btn-outline-info w-100 py-3 text-start">
+                      <i className="bi bi-graph-up fs-2 d-block mb-2"></i>
+                      <strong>Analytics</strong>
+                      <small className="text-muted d-block">Statistiques globales</small>
+                    </Link>
+                  </div>
+                  <div className="col-md-3">
+                    <Link to="/dashboard/transactions" className="btn btn-outline-warning w-100 py-3 text-start">
+                      <i className="bi bi-eye fs-2 d-block mb-2"></i>
+                      <strong>Surveillance</strong>
+                      <small className="text-muted d-block">Transactions suspectes</small>
+                    </Link>
+                  </div>
+                </div>
+              ) : (
+                // Actions User
+                <div className="row g-3">
+                  <div className="col-md-3">
+                    <Link to="/dashboard/ads/create" className="btn btn-outline-primary w-100 py-3 text-start">
+                      <i className="bi bi-plus-circle fs-2 d-block mb-2"></i>
+                      <strong>Créer Annonce</strong>
+                      <small className="text-muted d-block">Nouvelle offre</small>
+                    </Link>
+                  </div>
+                  <div className="col-md-3">
+                    <Link to="/dashboard/ads" className="btn btn-outline-success w-100 py-3 text-start">
+                      <i className="bi bi-search fs-2 d-block mb-2"></i>
+                      <strong>Marketplace</strong>
+                      <small className="text-muted d-block">Voir les offres</small>
+                    </Link>
+                  </div>
+                  <div className="col-md-3">
+                    <Link to="/dashboard/wallet" className="btn btn-outline-warning w-100 py-3 text-start">
+                      <i className="bi bi-wallet2 fs-2 d-block mb-2"></i>
+                      <strong>Portefeuille</strong>
+                      <small className="text-muted d-block">Gérer solde</small>
+                    </Link>
+                  </div>
+                  <div className="col-md-3">
+                    <Link to="/dashboard/profile" className="btn btn-outline-info w-100 py-3 text-start">
+                      <i className="bi bi-person fs-2 d-block mb-2"></i>
+                      <strong>Mon Profil</strong>
+                      <small className="text-muted d-block">Paramètres</small>
+                    </Link>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
       </div>
 
-      {/* Section supplémentaire pour les admins */}
-      {isAdmin && (
-        <div className="row mt-4">
-          <div className="col-12">
-            <div className="card border-danger">
-              <div className="card-header bg-danger text-white">
-                <h5 className="card-title mb-0">
-                  <i className="bi bi-exclamation-triangle me-2"></i>
-                  Zone Administrateur
-                </h5>
-              </div>
-              <div className="card-body">
-                <div className="alert alert-warning">
-                  <strong>Attention:</strong> Vous avez accès à toutes les fonctionnalités sensibles du système.
-                  Soyez prudent dans vos actions.
-                </div>
-                <div className="row">
-                  <div className="col-md-6">
-                    <ul className="list-group">
-                      <li className="list-group-item d-flex justify-content-between align-items-center">
-                        Gestion des utilisateurs
-                        <span className="badge bg-primary rounded-pill">156</span>
-                      </li>
-                      <li className="list-group-item d-flex justify-content-between align-items-center">
-                        Annonces en attente
-                        <span className="badge bg-warning rounded-pill">12</span>
-                      </li>
-                    </ul>
-                  </div>
-                  <div className="col-md-6">
-                    <ul className="list-group">
-                      <li className="list-group-item d-flex justify-content-between align-items-center">
-                        Transactions aujourd'hui
-                        <span className="badge bg-success rounded-pill">24</span>
-                      </li>
-                      <li className="list-group-item d-flex justify-content-between align-items-center">
-                        Signalements
-                        <span className="badge bg-danger rounded-pill">3</span>
-                      </li>
-                    </ul>
-                  </div>
-                </div>
-              </div>
-            </div>
+      {/* Section Informative */}
+      <div className="row mt-4">
+        <div className="col-12">
+          <div className={`alert ${isAdmin ? 'alert-warning' : 'alert-info'}`}>
+            <h5 className="alert-heading">
+              <i className={`bi ${isAdmin ? 'bi-shield-check' : 'bi-rocket'} me-2`}></i>
+              {isAdmin ? 'Espace Administrateur' : 'Bienvenue sur MoroccanCrypto!'}
+            </h5>
+            <p className="mb-0">
+              {isAdmin 
+                ? 'Vous avez un accès complet à toutes les fonctionnalités de modération et de supervision de la plateforme.'
+                : 'Commencez par explorer le marketplace ou créez votre première annonce pour démarrer vos échanges.'
+              }
+            </p>
           </div>
         </div>
-      )}
+      </div>
     </div>
   );
 };

@@ -1,14 +1,14 @@
 // src/contexts/AuthContext.tsx
-import React, { createContext, useState, useContext, useEffect } from 'react';
+import React, { createContext, useState, useContext, useEffect, useMemo } from 'react';
 import { 
   loginUser, 
   registerUser, 
   logoutUser, 
   getCurrentUserFromStorage,
-  type User, 
   type LoginResponse,
   type RegisterUserData 
 } from '../api/UserService';
+import type { User } from '../types/User'; // ✅ Import depuis types/User
 
 interface AuthContextType {
   user: User | null;
@@ -108,20 +108,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     console.log('✅ [AuthContext] Déconnexion terminée');
   };
 
-  // Calcul des rôles
-  const isAuthenticated = !!user;
-  const isAdmin = user?.roles?.includes('ROLE_ADMIN') || false;
-  const isUser = user?.roles?.includes('ROLE_USER') || false;
+  // Calcul des rôles avec useMemo pour optimiser les rendus
+  const { isAuthenticated, isAdmin, isUser } = useMemo(() => {
+    const isAuthenticated = !!user;
+    const isAdmin = user?.roles?.includes('ROLE_ADMIN') || false;
+    const isUser = user?.roles?.includes('ROLE_USER') || false;
 
-  console.log('📊 [AuthContext] État actuel:', {
-    user: user?.email || 'null',
-    isAuthenticated,
-    isAdmin,
-    isUser,
-    loading
-  });
+    console.log('📊 [AuthContext] État actuel:', {
+      user: user?.email || 'null',
+      isAuthenticated,
+      isAdmin,
+      isUser,
+      loading
+    });
 
-  const value: AuthContextType = {
+    return { isAuthenticated, isAdmin, isUser };
+  }, [user, loading]);
+
+  // Valeur du context optimisée avec useMemo
+  const contextValue = useMemo(() => ({
     user,
     isAuthenticated,
     isAdmin,
@@ -131,19 +136,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     logout,
     loading,
     checkAuthStatus
-  };
+  }), [user, isAuthenticated, isAdmin, isUser, loading]);
 
   return (
-    <AuthContext.Provider value={value}>
+    <AuthContext.Provider value={contextValue}>
       {children}
     </AuthContext.Provider>
   );
 };
 
-export const useAuth = () => {
+// Hook useAuth optimisé pour HMR
+export function useAuth() {
   const context = useContext(AuthContext);
   if (context === undefined) {
     throw new Error('useAuth must be used within an AuthProvider');
   }
   return context;
-};
+}
+
+// Export par défaut pour la compatibilité
+export default AuthContext;
