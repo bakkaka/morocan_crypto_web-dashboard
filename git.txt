@@ -4,6 +4,7 @@ git add README.md
 git commit -m "first commit"
 git commit -m "configuration de base service securite"
 git commit -m "configuration de Auth Frontend et backend"
+git commit -m "configuration de la sidebarre de l'admin et l'user"
 git branch -M main
 git remote add origin https://github.com/bakkaka/morocan_crypto_web-dashboard.git
 git push -u origin main

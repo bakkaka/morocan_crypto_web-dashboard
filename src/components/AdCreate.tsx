@@ -29,7 +29,7 @@ interface AdCreateData {
 
 const AdCreate: React.FC = () => {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user: _user } = useAuth();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
@@ -200,7 +200,8 @@ const AdCreate: React.FC = () => {
       }
 
       // Préparer les données pour l'API Platform
-      const selectedCurrency = getSelectedCurrency();
+      const  selectedCurrency = getSelectedCurrency();
+     
       const postData = {
         type: formData.type,
         amount: formData.amount,
