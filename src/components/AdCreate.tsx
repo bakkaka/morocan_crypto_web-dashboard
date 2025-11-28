@@ -1,7 +1,6 @@
 // src/components/AdCreate.tsx
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
 import api from '../api/axiosConfig';
 
 interface Currency {
@@ -9,7 +8,7 @@ interface Currency {
   code: string;
   name: string;
   decimals: number;
-  type?: 'crypto' | 'fiat'; // Optionnel pour compatibilité
+  type?: 'crypto' | 'fiat';
 }
 
 interface PaymentMethod {
@@ -29,14 +28,13 @@ interface AdCreateData {
 
 const AdCreate: React.FC = () => {
   const navigate = useNavigate();
-  const { user: _user } = useAuth();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
+
   const [currencies, setCurrencies] = useState<Currency[]>([]);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
-  
+
   const [formData, setFormData] = useState<AdCreateData>({
     type: 'buy',
     amount: 0,
@@ -46,7 +44,6 @@ const AdCreate: React.FC = () => {
     terms: ''
   });
 
-  // Helper pour extraire les données de l'API Platform
   const extractHydraMember = (data: any): any[] => {
     if (data.member && Array.isArray(data.member)) {
       return data.member;
@@ -58,28 +55,22 @@ const AdCreate: React.FC = () => {
     return [];
   };
 
-  // Filtrer les cryptos (solution sécurisée)
   const getCryptoCurrencies = (): Currency[] => {
     return currencies.filter(currency => {
-      // Si la propriété type existe, l'utiliser
       if (currency.type !== undefined) {
         return currency.type === 'crypto';
       }
-      // Sinon, filtrer par codes connus des cryptos
       return ['USDT', 'BTC', 'ETH'].includes(currency.code);
     });
   };
 
-  // Charger les données depuis l'API
   useEffect(() => {
     const loadFormData = async () => {
       try {
         setDataLoading(true);
         setError(null);
-        
         console.log('🔄 Chargement des données depuis API...');
 
-        // Chargement parallèle pour plus de performance
         const [currenciesResponse, paymentMethodsResponse] = await Promise.all([
           api.get('/currencies'),
           api.get('/payment_methods')
@@ -94,18 +85,16 @@ const AdCreate: React.FC = () => {
         setCurrencies(currenciesData);
         setPaymentMethods(paymentMethodsData);
 
-        // Sélectionner USDT par défaut
-        const defaultCurrency = currenciesData.find((c: Currency) => 
+        const defaultCurrency = currenciesData.find((c: Currency) =>
           c.code === 'USDT' || (c.type && c.type === 'crypto')
         );
-        
+
         if (defaultCurrency && !formData.currency) {
           setFormData(prev => ({
             ...prev,
             currency: `/api/currencies/${defaultCurrency.id}`
           }));
         }
-
       } catch (err: any) {
         console.error('❌ Erreur lors du chargement des données:', err);
         setError('Impossible de charger les données nécessaires. Vérifiez la connexion API.');
@@ -115,11 +104,12 @@ const AdCreate: React.FC = () => {
     };
 
     loadFormData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value, type } = e.target;
-    
+
     setFormData(prev => ({
       ...prev,
       [name]: type === 'number' ? parseFloat(value) || 0 : value
@@ -143,24 +133,20 @@ const AdCreate: React.FC = () => {
     });
   };
 
-  // Calculer le montant total
   const calculateTotal = (): number => {
     return formData.amount * formData.price;
   };
 
-  // Obtenir la devise sélectionnée
   const getSelectedCurrency = (): Currency | undefined => {
     return currencies.find(c => `/api/currencies/${c.id}` === formData.currency);
   };
 
-  // Obtenir les méthodes de paiement sélectionnées
   const getSelectedPaymentMethods = (): PaymentMethod[] => {
-    return paymentMethods.filter(method => 
+    return paymentMethods.filter(method =>
       formData.acceptedPaymentMethods.includes(`/api/payment_methods/${method.id}`)
     );
   };
 
-  // Valider le formulaire
   const validateForm = (): string | null => {
     if (!formData.currency) {
       return 'Veuillez sélectionner une crypto-monnaie';
@@ -171,8 +157,8 @@ const AdCreate: React.FC = () => {
     }
 
     if (formData.amount <= 0) {
-      return formData.type === 'buy' 
-        ? 'Le montant à acheter doit être positif' 
+      return formData.type === 'buy'
+        ? 'Le montant à acheter doit être positif'
         : 'Le montant à vendre doit être positif';
     }
 
@@ -193,15 +179,12 @@ const AdCreate: React.FC = () => {
     setError(null);
 
     try {
-      // Validation
       const validationError = validateForm();
       if (validationError) {
         throw new Error(validationError);
       }
 
       // Préparer les données pour l'API Platform
-      const  selectedCurrency = getSelectedCurrency();
-     
       const postData = {
         type: formData.type,
         amount: formData.amount,
@@ -215,15 +198,14 @@ const AdCreate: React.FC = () => {
 
       console.log('📤 Données envoyées à l\'API:', postData);
 
-      // Envoyer à l'API
       const response = await api.post('/ads', postData);
       console.log('✅ Réponse API:', response.data);
-      
+
       if (response.status === 201) {
         console.log('🎉 Annonce créée avec succès!');
         navigate('/dashboard/ads');
       }
-      
+
     } catch (err: any) {
       console.error('❌ Erreur création annonce:', err);
       handleApiError(err);
@@ -236,7 +218,7 @@ const AdCreate: React.FC = () => {
     if (err.response?.data) {
       const apiError = err.response.data;
       console.error('📋 Détails erreur API:', apiError);
-      
+
       if (apiError.violations) {
         const errorMessages = apiError.violations.map((v: any) => `${v.propertyPath}: ${v.message}`).join(', ');
         setError(`Erreurs de validation: ${errorMessages}`);
@@ -252,7 +234,6 @@ const AdCreate: React.FC = () => {
     }
   };
 
-  // Rendu conditionnel pour les méthodes de paiement
   const renderPaymentMethods = () => {
     if (dataLoading) {
       return (
@@ -311,14 +292,14 @@ const AdCreate: React.FC = () => {
             <div>
               <h1 className="h2 mb-1">Créer une annonce</h1>
               <p className="text-muted">
-                {formData.type === 'buy' 
-                  ? 'Publiez votre demande d\'achat' 
+                {formData.type === 'buy'
+                  ? 'Publiez votre demande d\'achat'
                   : 'Publiez votre offre de vente'
                 }
               </p>
             </div>
-            <button 
-              type="button" 
+            <button
+              type="button"
               className="btn btn-outline-secondary"
               onClick={() => navigate('/dashboard/ads')}
               disabled={loading}
@@ -378,7 +359,7 @@ const AdCreate: React.FC = () => {
                           {formData.type === 'buy' ? '🛒 Vous voulez ACHETER' : '💰 Vous voulez VENDRE'}
                         </strong>
                         <div className="mt-1">
-                          <strong>{formData.amount} {selectedCurrency?.code || 'USDT'}</strong> 
+                          <strong>{formData.amount} {selectedCurrency?.code || 'USDT'}</strong>
                           {' à '}
                           <strong>{formData.price} MAD/{selectedCurrency?.code || 'USDT'}</strong>
                           <br />
@@ -452,8 +433,8 @@ const AdCreate: React.FC = () => {
                       disabled={loading}
                     />
                     <div className="form-text">
-                      {formData.type === 'buy' 
-                        ? `Quantité de ${selectedCurrency?.code || 'crypto'} que vous souhaitez acheter (min: 10)` 
+                      {formData.type === 'buy'
+                        ? `Quantité de ${selectedCurrency?.code || 'crypto'} que vous souhaitez acheter (min: 10)`
                         : `Quantité de ${selectedCurrency?.code || 'crypto'} que vous mettez en vente (min: 10)`
                       }
                     </div>
@@ -504,8 +485,8 @@ const AdCreate: React.FC = () => {
                 {/* Méthodes de paiement acceptées */}
                 <div className="mb-4">
                   <label className="form-label">
-                    {formData.type === 'buy' 
-                      ? 'Méthodes de paiement que vous utiliserez *' 
+                    {formData.type === 'buy'
+                      ? 'Méthodes de paiement que vous utiliserez *'
                       : 'Méthodes de paiement que vous acceptez *'
                     }
                   </label>

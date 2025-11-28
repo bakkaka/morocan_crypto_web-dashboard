@@ -1,3 +1,4 @@
+// src/components/AdList.tsx
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { Link } from 'react-router-dom';
@@ -27,9 +28,8 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | 'buy' | 'sell'>('all');
-  const { user, isAdmin } = useAuth();
+  const { user } = useAuth(); // <-- isAdmin retiré (non utilisé)
 
-  // Données simulées pour la démo
   const mockAds: Ad[] = [
     {
       id: 1,
@@ -69,18 +69,16 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
   useEffect(() => {
     const loadAds = async () => {
       setLoading(true);
-      
-      // Simulation chargement API
+
       setTimeout(() => {
         let filteredAds = [...mockAds];
-        
-        // Appliquer les filtres
+
         if (filter === 'my-ads') {
           filteredAds = mockAds.filter(ad => ad.user.id === user?.id);
         } else if (filter === 'moderation') {
           filteredAds = mockAds.filter(ad => ad.status === 'pending');
         }
-        
+
         setAds(filteredAds);
         setLoading(false);
       }, 1000);
@@ -136,7 +134,7 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
           </h2>
           <p className="text-muted mb-0">{getHeaderDescription()}</p>
         </div>
-        
+
         {filter === 'all' && (
           <Link to="/dashboard/ads/create" className="btn btn-primary">
             <i className="bi bi-plus-circle me-2"></i>
@@ -164,7 +162,7 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
               </div>
             </div>
             <div className="col-md-3">
-              <select 
+              <select
                 className="form-select"
                 value={typeFilter}
                 onChange={(e) => setTypeFilter(e.target.value as any)}
@@ -193,9 +191,9 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
             <i className="bi bi-inbox fs-1 text-muted mb-3"></i>
             <h5 className="text-muted">Aucune annonce trouvée</h5>
             <p className="text-muted">
-              {searchTerm || typeFilter !== 'all' 
+              {searchTerm || typeFilter !== 'all'
                 ? 'Aucune annonce ne correspond à vos critères de recherche.'
-                : filter === 'my-ads' 
+                : filter === 'my-ads'
                   ? 'Vous n\'avez pas encore créé d\'annonce.'
                   : 'Aucune annonce disponible pour le moment.'
               }
@@ -223,7 +221,7 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
                 <div className="card-body">
                   <h5 className="card-title">{ad.title}</h5>
                   <p className="card-text text-muted">{ad.description}</p>
-                  
+
                   <div className="d-flex justify-content-between align-items-center mb-3">
                     <div>
                       <small className="text-muted">Par</small>
