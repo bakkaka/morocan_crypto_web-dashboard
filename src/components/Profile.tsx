@@ -3,7 +3,9 @@ import React, { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 
 const Profile: React.FC = () => {
-  const { user, updateProfile } = useAuth();
+  //const { user, updateProfile } = useAuth();
+  const { user } = useAuth();
+
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [formData, setFormData] = useState({
