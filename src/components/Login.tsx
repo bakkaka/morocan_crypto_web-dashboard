@@ -32,7 +32,8 @@ const Login: React.FC = () => {
     const checkAPI = async () => {
       try {
         // Pour le test API, on fait un simple fetch
-        const response = await fetch('http://localhost:8000/api/docs');
+        const response = await fetch('https://morocancryptobackend-production.up.railway.app/api/docs');
+
         setApiStatus({ 
           connected: response.ok, 
           message: response.ok ? 'Serveur OK' : 'Serveur erreur' 
@@ -186,7 +187,7 @@ const Login: React.FC = () => {
                     <strong>Statut serveur:</strong> {apiStatus.message}
                     {!apiStatus.connected && (
                       <div>
-                        <small>Assurez-vous que le serveur Symfony est démarré sur localhost:8000</small>
+                        <small>Connexion au serveur distant Railway…</small>
                       </div>
                     )}
                   </small>
