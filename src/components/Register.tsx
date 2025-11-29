@@ -124,7 +124,7 @@ const Register: React.FC = () => {
                     <strong>Statut serveur:</strong> {apiStatus.message}
                     {!apiStatus.connected && (
                       <div>
-                        <small>Assurez-vous que le serveur Symfony est démarré sur localhost:8000</small>
+                        <small><small>Connexion au serveur distant Railway...</small></small>
                       </div>
                     )}
                   </small>
