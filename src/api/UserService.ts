@@ -544,13 +544,13 @@ export const searchUsersByName = async (query: string): Promise<User[]> => {
 
 export const testAPIConnection = async (): Promise<{ connected: boolean; message: string }> => {
   try {
-    await api.get('/users', { timeout: 5000 });
+    // Testez une route publique comme /api/docs au lieu de /api/users
+    await api.get('/docs', { timeout: 5000 });
     return { connected: true, message: 'Serveur OK' };
   } catch (error) {
     return { connected: false, message: 'Serveur non accessible' };
   }
 };
-
 // Export par défaut
 export default {
   loginUser,
