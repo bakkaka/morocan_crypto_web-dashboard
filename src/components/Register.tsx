@@ -1,7 +1,7 @@
 // src/pages/Register.tsx
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { registerUser, testAPIConnection, UserServiceError } from '../api/UserService';
+import { registerUser, UserServiceError } from '../api/UserService';
 import type { RegisterUserData } from '../api/UserService';
 
 const Register: React.FC = () => {
@@ -24,10 +24,14 @@ const Register: React.FC = () => {
   useEffect(() => {
     const checkAPI = async () => {
       try {
-        const status = await testAPIConnection();
-        setApiStatus(status);
+        // Même test que dans Login.tsx
+        const response = await fetch('https://morocancryptobackend-production.up.railway.app/api/docs');
+        setApiStatus({ 
+          connected: response.ok, 
+          message: response.ok ? 'Serveur OK' : 'Serveur erreur' 
+        });
       } catch (error) {
-        setApiStatus({ connected: false, message: 'Erreur de connexion au serveur' });
+        setApiStatus({ connected: false, message: 'Serveur non accessible' });
       }
     };
     checkAPI();
@@ -124,7 +128,7 @@ const Register: React.FC = () => {
                     <strong>Statut serveur:</strong> {apiStatus.message}
                     {!apiStatus.connected && (
                       <div>
-                        <small><small>Connexion au serveur distant Railway...</small></small>
+                        <small>Connexion au serveur distant Railway...</small>
                       </div>
                     )}
                   </small>
