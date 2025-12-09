@@ -2,7 +2,8 @@
 import axios from 'axios';
 
 const api = axios.create({
-   baseURL: 'https://morocancryptobackend-production.up.railway.app/api',
+  // CHANGEZ cette ligne :
+  baseURL: 'https://morocancryptobackend-production-f3b6.up.railway.app/api',
   headers: {
     'Content-Type': 'application/json',
   },
