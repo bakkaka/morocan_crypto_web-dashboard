@@ -136,15 +136,38 @@ const extractUserFromToken = (token: string, email: string): User => {
 // --- Fonctions d'authentification ---
 export const loginUser = async (email: string, password: string): Promise<LoginResponse> => {
   try {
-    console.log('🔐 [UserService] Tentative de connexion JWT...', { email });
+    console.log('🔐 [UserService] Tentative de connexion JWT...', { email, password: '***' });
 
-    const loginResponse = await api.post<{ token: string }>('/login_check', {
-      username: email,
-      password
-    });
+    // AJOUT : Log des données envoyées pour debug
+    const requestData = {
+      email: email,    // ESSAYEZ AVEC "email" D'ABORD
+      password: password
+    };
+    
+    console.log('📤 [UserService] Données envoyées au serveur:', requestData);
+
+    // ESSAYEZ LE FORMAT "email" D'ABORD (celui qui marche avec PowerShell)
+    let loginResponse;
+    
+    try {
+      // Tentative 1 : Avec le champ "email" (comme PowerShell)
+      loginResponse = await api.post<{ token: string }>('/login_check', requestData);
+      console.log('✅ [UserService] Connexion réussie avec format "email"');
+    } catch (emailFormatError: any) {
+      console.log('⚠️ [UserService] Format "email" échoué, tentative avec "username"...');
+      
+      // Tentative 2 : Avec le champ "username" (format original)
+      const requestDataWithUsername = {
+        username: email,  // Utilisation de "username" au lieu de "email"
+        password: password
+      };
+      
+      loginResponse = await api.post<{ token: string }>('/login_check', requestDataWithUsername);
+      console.log('✅ [UserService] Connexion réussie avec format "username"');
+    }
 
     console.log('✅ [UserService] Token JWT reçu');
-    const { token } = loginResponse.data;
+    const { token } = loginResponse!.data;
 
     if (!token) {
       throw new UserServiceError('Token non reçu du serveur', 'NO_TOKEN');
@@ -182,12 +205,26 @@ export const loginUser = async (email: string, password: string): Promise<LoginR
   } catch (error: any) {
     console.error('❌ [UserService] Erreur de connexion JWT:', error);
     
+    // AJOUT : Log détaillé pour debug
+    if (error.response) {
+      console.error('📊 [UserService] Détails de l\'erreur:');
+      console.error('   - Status:', error.response.status);
+      console.error('   - Data:', error.response.data);
+      console.error('   - URL:', error.response.config?.url);
+      console.error('   - Method:', error.response.config?.method);
+      console.error('   - Request Data:', error.response.config?.data);
+    }
+    
     localStorage.removeItem('authToken');
     localStorage.removeItem('currentUser');
     localStorage.removeItem('isAuthenticated');
     
     if (error.response?.status === 401) {
       throw new UserServiceError('Email ou mot de passe incorrect', 'UNAUTHORIZED', 401);
+    }
+    
+    if (error.response?.status === 400) {
+      throw new UserServiceError('Format de requête incorrect. Vérifiez les champs envoyés.', 'BAD_REQUEST', 400);
     }
     
     if (error.code === 'ERR_NETWORK') {
@@ -544,13 +581,13 @@ export const searchUsersByName = async (query: string): Promise<User[]> => {
 
 export const testAPIConnection = async (): Promise<{ connected: boolean; message: string }> => {
   try {
-    // Testez une route publique comme /api/docs au lieu de /api/users
     await api.get('/docs', { timeout: 5000 });
     return { connected: true, message: 'Serveur OK' };
   } catch (error) {
     return { connected: false, message: 'Serveur non accessible' };
   }
 };
+
 // Export par défaut
 export default {
   loginUser,
