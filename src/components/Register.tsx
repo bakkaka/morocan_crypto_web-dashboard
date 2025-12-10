@@ -25,7 +25,7 @@ const Register: React.FC = () => {
     const checkAPI = async () => {
       try {
         // Même test que dans Login.tsx
-        const response = await fetch('https://morocancryptobackend-production-f3b6.up.railway.app/api/');
+        const response = await fetch('https://morocancryptobackend-production-f3b6.up.railway.app/api');
         setApiStatus({ 
           connected: response.ok, 
           message: response.ok ? 'Serveur OK' : 'Serveur erreur' 

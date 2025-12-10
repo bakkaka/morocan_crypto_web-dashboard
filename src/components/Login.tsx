@@ -32,7 +32,7 @@ const Login: React.FC = () => {
     const checkAPI = async () => {
       try {
         // Pour le test API, on fait un simple fetch
-        const response = await fetch('https://morocancryptobackend-production-f3b6.up.railway.app/api/');
+        const response = await fetch('https://morocancryptobackend-production-f3b6.up.railway.app/api');
 
         setApiStatus({ 
           connected: response.ok, 
