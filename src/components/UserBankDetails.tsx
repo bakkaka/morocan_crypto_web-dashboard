@@ -18,6 +18,11 @@ interface UserBankDetail {
   createdAt: string;
   updatedAt?: string;
   adsUsingThisDetail?: any[];
+  user?: {
+    id: number;
+    email: string;
+    fullName: string;
+  };
 }
 
 interface UserBankDetailsProps {
@@ -99,8 +104,10 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
   useEffect(() => {
     if (user) {
       loadBankDetails();
+    } else {
+      navigate('/login');
     }
-  }, [user, loadBankDetails]);
+  }, [user, navigate, loadBankDetails]);
 
   const handleInputChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
@@ -143,6 +150,11 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
         throw new Error('Le numéro de compte doit contenir entre 10 et 50 caractères');
       }
 
+      // Vérifier que l'utilisateur est connecté
+      if (!user || !user.id) {
+        throw new Error('Vous devez être connecté pour ajouter des coordonnées bancaires');
+      }
+
       const postData = {
         bankName: formData.bankName,
         accountHolder: formData.accountHolder,
@@ -150,7 +162,9 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
         branchName: formData.branchName.trim() || null,
         swiftCode: formData.swiftCode.trim() || null,
         accountType: formData.accountType,
-        isActive: formData.isActive
+        isActive: formData.isActive,
+        // ⬇️ LIGNE CRITIQUE : Associer l'utilisateur connecté
+        user: `/api/users/${user.id}`
       };
 
       console.log('📤 Envoi création coordonnées:', postData);
@@ -184,6 +198,9 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
         setError(err.response.data.detail);
       } else if (err.response?.data?.title) {
         setError(err.response.data.title);
+      } else if (err.message.includes('connecté')) {
+        setError('Session expirée. Veuillez vous reconnecter.');
+        setTimeout(() => navigate('/login'), 2000);
       } else {
         setError(err.message || 'Erreur lors de la création');
       }
@@ -463,7 +480,7 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
                 <button
                   type="submit"
                   className="btn btn-primary w-100"
-                  disabled={loading}
+                  disabled={loading || !user}
                 >
                   {loading ? (
                     <>
@@ -477,6 +494,13 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
                     </>
                   )}
                 </button>
+                
+                {!user && (
+                  <div className="alert alert-warning mt-3 mb-0">
+                    <i className="bi bi-exclamation-triangle me-2"></i>
+                    Vous devez être connecté pour ajouter des coordonnées bancaires
+                  </div>
+                )}
               </form>
             </div>
           </div>
