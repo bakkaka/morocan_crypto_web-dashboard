@@ -12,7 +12,8 @@ import AdList from "./components/AdList";
 import AdCreate from "./components/AdCreate";
 import TransactionList from "./components/TransactionList";
 import Profile from "./components/Profile";
-import UserBankDetails from "./components/UserBankDetails"; // Nouveau composant
+import UserBankDetails from "./components/UserBankDetails";
+import Currency from './components/Currency'; // Nouveau composant
 
 // Route protégée basique
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -244,6 +245,12 @@ function App() {
                 <UserBankDetails />
               </UserRoute>
             } />
+
+            <Route path="currencies" element={
+              <UserRoute>
+                <Currency />
+              </UserRoute>
+            } />
             
             {/* Annonces */}
             <Route path="ads">
@@ -289,7 +296,14 @@ function App() {
                 </AdminRoute>
               } />
             </Route>
-          </Route>
+
+             <Route path="currencies" element={
+                <AdminRoute>
+                  <Currency adminView={true} />
+                </AdminRoute>
+              } />
+            </Route>
+    
 
           {/* Redirection par défaut */}
           <Route path="*" element={<Navigate to="/" />} />
