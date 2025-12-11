@@ -1,3 +1,4 @@
+// src/App.tsx
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import PublicLayout from "./components/PublicLayout";
@@ -11,6 +12,7 @@ import AdList from "./components/AdList";
 import AdCreate from "./components/AdCreate";
 import TransactionList from "./components/TransactionList";
 import Profile from "./components/Profile";
+import UserBankDetails from "./components/UserBankDetails"; // Nouveau composant
 
 // Route protégée basique
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -236,6 +238,14 @@ function App() {
             {/* ROUTES UTILISATEUR */}
             <Route path="wallet" element={<WalletPage />} />
             
+            {/* Gestion des coordonnées bancaires */}
+            <Route path="bank-details" element={
+              <UserRoute>
+                <UserBankDetails />
+              </UserRoute>
+            } />
+            
+            {/* Annonces */}
             <Route path="ads">
               {/* Marketplace - Toutes les annonces */}
               <Route index element={<AdList />} />
@@ -271,6 +281,11 @@ function App() {
               <Route path="analytics" element={
                 <AdminRoute>
                   <AnalyticsPage />
+                </AdminRoute>
+              } />
+              <Route path="bank-details" element={
+                <AdminRoute>
+                  <UserBankDetails adminView={true} />
                 </AdminRoute>
               } />
             </Route>
