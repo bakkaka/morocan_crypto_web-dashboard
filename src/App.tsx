@@ -295,15 +295,13 @@ function App() {
                   <UserBankDetails adminView={true} />
                 </AdminRoute>
               } />
-            </Route>
-
-             <Route path="currencies" element={
+              <Route path="currencies" element={
                 <AdminRoute>
                   <Currency adminView={true} />
                 </AdminRoute>
               } />
             </Route>
-    
+          </Route> {/* ⬅️ CETTE PARENTHÈSE ÉTAIT MANQUANTE */}
 
           {/* Redirection par défaut */}
           <Route path="*" element={<Navigate to="/" />} />
