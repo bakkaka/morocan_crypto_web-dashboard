@@ -1,23 +1,11 @@
-// src/api/UserService.ts - VERSION SYMFONY
+// src/api/UserService.ts - VERSION FINALE CORRIGÉE
 import api from './axiosConfig';
 import type { User } from '../types/User';
 
-// --- Erreur personnalisée ---
-export class UserServiceError extends Error {
-  public code?: string;
-  public status?: number;
-  public details?: any;
+// ==============================
+// INTERFACES
+// ==============================
 
-  constructor(message: string, code?: string, status?: number, details?: any) {
-    super(message);
-    this.name = 'UserServiceError';
-    this.code = code;
-    this.status = status;
-    this.details = details;
-  }
-}
-
-// --- Interfaces ---
 export interface RegisterUserData {
   fullName: string;
   email: string;
@@ -25,12 +13,8 @@ export interface RegisterUserData {
   password: string;
 }
 
-export interface LoginData {
-  email: string;
-  password: string;
-}
-
 export interface LoginResponse {
+  token: string;
   user: User;
   message?: string;
 }
@@ -46,196 +30,245 @@ export interface UpdateUserData {
   walletAddress?: string;
 }
 
-// --- Validation ---
-const validateEmail = (email: string): boolean => 
-  /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+export class UserServiceError extends Error {
+  public code?: string;
+  public status?: number;
+  public details?: any;
 
-const validatePhone = (phone: string): boolean => 
-  /^[+]?[(]?[0-9]{1,4}[)]?[-\s.]?[0-9]{1,4}[-\s.]?[0-9]{1,9}$/.test(phone);
+  constructor(message: string, code?: string, status?: number, details?: any) {
+    super(message);
+    this.name = 'UserServiceError';
+    this.code = code;
+    this.status = status;
+    this.details = details;
+  }
+}
 
-const validatePassword = (password: string): boolean => 
-  password.length >= 6;
+// ==============================
+// CONSTANTS
+// ==============================
 
-const validateUserData = (data: RegisterUserData): void => {
-  if (!data.fullName || data.fullName.trim().length < 2) {
-    throw new UserServiceError('Le nom complet doit contenir au moins 2 caractères', 'VALIDATION_ERROR');
-  }
-  if (!data.email || !validateEmail(data.email)) {
-    throw new UserServiceError('Email invalide', 'VALIDATION_ERROR');
-  }
-  if (!data.phone || !validatePhone(data.phone)) {
-    throw new UserServiceError('Téléphone invalide', 'VALIDATION_ERROR');
-  }
-  if (!data.password || !validatePassword(data.password)) {
-    throw new UserServiceError('Le mot de passe doit contenir au moins 6 caractères', 'VALIDATION_ERROR');
-  }
-};
+const STORAGE_KEYS = {
+  USER: 'user',
+  TOKEN: 'authToken',
+  IS_AUTHENTICATED: 'isAuthenticated',
+  AUTH_TIMESTAMP: 'authTimestamp'
+} as const;
 
-// --- Fonctions d'authentification SYMFONY ---
+// ==============================
+// AUTHENTIFICATION (CORRIGÉ)
+// ==============================
+
 export const loginUser = async (email: string, password: string): Promise<LoginResponse> => {
+  const startTime = Date.now();
+  
   try {
-    console.log('🔐 [UserService] Tentative de connexion Symfony...', { email });
+    console.group('🔐 Connexion utilisateur');
+    console.log('📤 Envoi à /login_check');
+    console.log('👤 Email:', email);
 
-    // IMPORTANT: Symfony utilise /login_check avec email/password
+    // FORMAT CORRECT : email/password (comme PowerShell)
     const response = await api.post('/login_check', {
-      username: email,  // Symfony attend "username"
+      email: email,      // ← VOTRE BACKEND ATTEND "email" PAS "username"
       password: password
     });
 
-    console.log('✅ [UserService] Connexion Symfony réussie');
+    const responseTime = Date.now() - startTime;
+    console.log(`✅ Connexion réussie en ${responseTime}ms`);
     
-    // Symfony ne renvoie pas de token JWT dans le body
-    // L'authentification se fait via cookies/session
+    // VÉRIFICATION CRITIQUE : Analyse de la réponse
+    console.log('📥 Réponse du backend:', response.data);
     
-    // Essayez de récupérer l'utilisateur via session
-    let user: User;
+    // VOTRE BACKEND RETOURNE { token: "...", user: {...} }
+    const responseData = response.data;
+    const token = responseData.token;
+    const user = responseData.user;
     
-    try {
-      // Tentative 1: Via endpoint user si disponible
-      const userResponse = await api.get<User>('/users/me');
-      user = userResponse.data;
-      console.log('✅ [UserService] Utilisateur récupéré via /users/me');
-    } catch (meError: any) {
-      console.warn('⚠️ [UserService] /users/me non disponible (erreur:', meError.response?.status || meError.message, ')');
-      
-      // Tentative 2: Créer un utilisateur basique depuis l'email
-      user = {
-        id: 0, // Temporaire
+    if (!token) {
+      console.error('❌ AUCUN TOKEN dans la réponse!');
+      console.error('Structure réponse:', responseData);
+      throw new UserServiceError('Token non reçu du serveur', 'NO_TOKEN');
+    }
+
+    if (!user) {
+      console.warn('⚠️ Pas d\'objet user dans la réponse');
+      // Créer un user basique
+      const basicUser: User = {
+        id: 0,
         email: email,
-        fullName: email.split('@')[0], // Nom basé sur email
+        fullName: email.split('@')[0],
         roles: ['ROLE_USER'],
         isVerified: false,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-        reputation: 5.0
+        reputation: 5.0,
+        phone: ''
       };
-      console.log('⚠️ [UserService] Utilisation utilisateur temporaire');
+      responseData.user = basicUser;
     }
 
-    // Stockage dans localStorage
-    localStorage.setItem('user', JSON.stringify(user));
-    localStorage.setItem('isAuthenticated', 'true');
-    localStorage.setItem('authMethod', 'symfony_session');
-    localStorage.setItem('authTimestamp', Date.now().toString());
-
-    console.log('💾 [UserService] Utilisateur stocké:', user.email);
+    console.log('🔑 Token JWT reçu:', token.substring(0, 50) + '...');
+    console.log('👤 Utilisateur:', user.email);
     
-    return { 
-      user,
-      message: 'Connexion réussie'
-    };
+    // STOCKAGE CRITIQUE : MÊMES CLÉS QUE PowerShell
+    localStorage.setItem(STORAGE_KEYS.TOKEN, token);
+    localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+    localStorage.setItem(STORAGE_KEYS.IS_AUTHENTICATED, 'true');
+    localStorage.setItem(STORAGE_KEYS.AUTH_TIMESTAMP, Date.now().toString());
+
+    console.log('💾 Stockage réussi');
+    console.log('📊 Vérification storage:');
+    console.log('   authToken:', localStorage.getItem(STORAGE_KEYS.TOKEN)?.substring(0, 30) + '...');
+    console.log('   user:', localStorage.getItem(STORAGE_KEYS.USER)?.substring(0, 50) + '...');
+    
+    console.groupEnd();
+    return { token, user };
 
   } catch (error: any) {
-    console.error('❌ [UserService] Erreur de connexion:', error);
+    console.groupEnd();
+    console.error('❌ Erreur connexion:', error);
     
-    // Log détaillé
+    // Nettoyage en cas d'erreur
+    localStorage.removeItem(STORAGE_KEYS.TOKEN);
+    localStorage.removeItem(STORAGE_KEYS.USER);
+    localStorage.removeItem(STORAGE_KEYS.IS_AUTHENTICATED);
+    
+    // Gestion des erreurs
     if (error.response) {
-      console.error('📊 Détails erreur:', {
-        status: error.response.status,
-        data: error.response.data,
-        url: error.config?.url
-      });
-    }
-    
-    // Nettoyage
-    localStorage.removeItem('user');
-    localStorage.removeItem('isAuthenticated');
-    
-    // Gestion erreurs
-    if (error.response?.status === 401) {
-      throw new UserServiceError('Email ou mot de passe incorrect', 'UNAUTHORIZED', 401);
-    }
-    
-    if (error.response?.status === 400) {
-      throw new UserServiceError('Format de requête incorrect', 'BAD_REQUEST', 400);
+      const { status, data } = error.response;
+      
+      switch (status) {
+        case 401:
+          throw new UserServiceError(
+            'Email ou mot de passe incorrect',
+            'UNAUTHORIZED',
+            status
+          );
+        
+        case 400:
+          throw new UserServiceError(
+            'Format de requête incorrect. Utilisez email/password',
+            'BAD_REQUEST',
+            status
+          );
+        
+        default:
+          throw new UserServiceError(
+            data?.message || `Erreur serveur (${status})`,
+            'HTTP_ERROR',
+            status
+          );
+      }
     }
     
     if (error.code === 'ERR_NETWORK') {
       throw new UserServiceError('Impossible de se connecter au serveur', 'NETWORK_ERROR');
     }
-
+    
     throw new UserServiceError(
-      error.response?.data?.message || 'Erreur lors de la connexion', 
-      'LOGIN_ERROR', 
-      error.response?.status
+      error.message || 'Erreur inconnue',
+      'UNKNOWN_ERROR'
     );
   }
 };
 
 export const logoutUser = (): void => {
-  console.log('👋 [UserService] Déconnexion Symfony');
+  console.group('👋 Déconnexion');
   
-  // Appel API de déconnexion Symfony
-  api.post('/auth/logout', {}).catch(err => {
-    console.warn('⚠️ Erreur déconnexion API:', err.message);
-  });
-  
-  // Nettoyage local
-  localStorage.removeItem('user');
-  localStorage.removeItem('isAuthenticated');
-  localStorage.removeItem('authMethod');
-  localStorage.removeItem('authTimestamp');
-  
-  // Nettoyage cookies
-  document.cookie.split(';').forEach(cookie => {
-    const name = cookie.split('=')[0].trim();
-    document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
-  });
-  
-  console.log('✅ [UserService] Déconnexion complète');
+  try {
+    // Appel API logout si disponible
+    api.post('/auth/logout', {}).catch(() => {
+      console.log('ℹ️ Endpoint /auth/logout non disponible');
+    });
+    
+    // Nettoyage COMPLET
+    Object.values(STORAGE_KEYS).forEach(key => {
+      localStorage.removeItem(key);
+    });
+    
+    console.log('✅ Déconnexion réussie');
+    
+    // Redirection vers login
+    setTimeout(() => {
+      window.location.href = '/login';
+    }, 500);
+    
+  } catch (error) {
+    console.error('❌ Erreur déconnexion:', error);
+  } finally {
+    console.groupEnd();
+  }
 };
+
+// ==============================
+// GETTERS & CHECKERS
+// ==============================
 
 export const getCurrentUserFromStorage = (): User | null => {
   try {
-    const userStr = localStorage.getItem('user');
+    const userStr = localStorage.getItem(STORAGE_KEYS.USER);
+    if (!userStr) return null;
     
-    if (!userStr) {
-      console.log('🔍 [UserService] Aucun utilisateur en storage');
-      return null;
-    }
-
     const user = JSON.parse(userStr);
-    
-    if (!user || typeof user !== 'object' || !user.email) {
-      console.warn('⚠️ [UserService] Structure utilisateur invalide');
-      return null;
-    }
-
-    console.log('🔍 [UserService] Utilisateur trouvé:', user.email);
-    return user;
-    
+    return user && user.email ? user : null;
   } catch (error) {
-    console.error('❌ [UserService] Erreur parsing user:', error);
+    console.error('❌ Erreur parsing user:', error);
     return null;
   }
 };
 
 export const getCurrentUserFromAPI = async (): Promise<User | null> => {
   try {
-    console.log('🔍 [UserService] Tentative /users/me...');
-    
     const response = await api.get<User>('/users/me');
-    
-    console.log('✅ [UserService] Utilisateur API:', response.data.email);
     return response.data;
-    
   } catch (error: any) {
-    console.warn('⚠️ [UserService] /users/me non disponible:', {
-      status: error.response?.status,
-      message: error.message
-    });
-    
-    // Fallback: utiliser storage
+    console.warn('⚠️ /users/me non disponible:', error.response?.status || error.message);
     return getCurrentUserFromStorage();
   }
 };
 
-// --- Fonctions utilisateur ---
+export const getAuthToken = (): string | null => {
+  return localStorage.getItem(STORAGE_KEYS.TOKEN);
+};
+
+export const isAuthenticated = (): boolean => {
+  const token = getAuthToken();
+  const user = getCurrentUserFromStorage();
+  const isAuth = localStorage.getItem(STORAGE_KEYS.IS_AUTHENTICATED) === 'true';
+  
+  return !!(token && user && isAuth);
+};
+
+// ==============================
+// REGISTRATION
+// ==============================
+
+const validateEmail = (email: string): boolean => 
+  /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+
+const validatePhone = (phone: string): boolean => 
+  /^212\d{9}$/.test(phone);  // Format: 212XXXXXXXXX
+
+const validatePassword = (password: string): boolean => 
+  password.length >= 6;
+
 export const registerUser = async (data: RegisterUserData): Promise<User> => {
   try {
-    console.log('📝 [UserService] Début inscription...');
-    validateUserData(data);
-
+    console.group('📝 Inscription');
+    
+    // Validation
+    if (!data.email || !validateEmail(data.email)) {
+      throw new UserServiceError('Email invalide', 'VALIDATION_ERROR');
+    }
+    
+    if (!data.phone || !validatePhone(data.phone)) {
+      throw new UserServiceError('Téléphone invalide (format: 212XXXXXXXXX)', 'VALIDATION_ERROR');
+    }
+    
+    if (!data.password || !validatePassword(data.password)) {
+      throw new UserServiceError('Mot de passe doit contenir au moins 6 caractères', 'VALIDATION_ERROR');
+    }
+    
     const payload = {
       fullName: data.fullName.trim(),
       email: data.email.toLowerCase().trim(),
@@ -245,181 +278,133 @@ export const registerUser = async (data: RegisterUserData): Promise<User> => {
       isVerified: false,
       reputation: 5.0,
     };
-
-    console.log('📤 [UserService] Envoi inscription...');
+    
+    console.log('📤 Envoi inscription...');
     const response = await api.post<User>('/users', payload);
-    console.log('✅ [UserService] Inscription réussie:', response.data.email);
+    
+    console.log('✅ Inscription réussie:', response.data.email);
+    console.groupEnd();
     
     return response.data;
+    
   } catch (error: any) {
-    console.error('❌ [UserService] Erreur inscription:', error);
+    console.groupEnd();
+    console.error('❌ Erreur inscription:', error);
     
-    if (error.response?.data?.['hydra:description']) {
-      throw new UserServiceError(
-        error.response.data['hydra:description'], 
-        'API_ERROR', 
-        error.response.status
-      );
-    }
-    
-    if (error.response?.data?.detail) {
-      throw new UserServiceError(
-        error.response.data.detail, 
-        'API_ERROR', 
-        error.response.status
-      );
+    if (error.response?.data?.violations) {
+      const messages = error.response.data.violations
+        .map((v: any) => `${v.propertyPath}: ${v.message}`)
+        .join(', ');
+      throw new UserServiceError(messages, 'VALIDATION_ERROR', error.response.status);
     }
     
     if (error.code === 'ERR_NETWORK') {
       throw new UserServiceError('Impossible de se connecter au serveur', 'NETWORK_ERROR');
     }
     
-    throw new UserServiceError('Erreur lors de l\'inscription', 'UNKNOWN_ERROR');
+    throw error;
   }
 };
 
-export const isAuthenticated = (): boolean => {
-  const user = getCurrentUserFromStorage();
-  const isAuthFlag = localStorage.getItem('isAuthenticated') === 'true';
-  const hasSessionCookie = document.cookie.includes('PHPSESSID');
-  
-  const authenticated = !!(user && isAuthFlag && hasSessionCookie);
-  
-  console.log('🔍 [UserService] Vérification auth:', {
-    hasUser: !!user,
-    isAuthFlag,
-    hasSessionCookie,
-    authenticated
-  });
-  
-  return authenticated;
-};
+// ==============================
+// ADDITIONAL FUNCTIONS
+// ==============================
 
 export const refreshUserData = async (): Promise<User | null> => {
   try {
     const user = await getCurrentUserFromAPI();
     if (user) {
-      localStorage.setItem('user', JSON.stringify(user));
-      console.log('✅ [UserService] Données rafraîchies:', user.email);
+      localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+      console.log('✅ Données utilisateur rafraîchies');
     }
     return user;
   } catch (error) {
-    console.error('❌ [UserService] Erreur rafraîchissement:', error);
+    console.error('❌ Erreur rafraîchissement:', error);
     return null;
   }
 };
 
-// --- Fonctions supplémentaires ---
-export const getUsers = async (page = 1, itemsPerPage = 30): Promise<{ users: User[]; total: number }> => {
+export const getUsers = async (): Promise<{ users: User[]; total: number }> => {
   try {
-    console.log('🔍 [UserService] Récupération utilisateurs...');
-    
     const response = await api.get<any>('/users');
     
-    // Gestion format Hydra
-    if (response.data && response.data.member) {
+    if (response.data?.member) {
       return { 
         users: response.data.member, 
         total: response.data.totalItems || response.data.member.length
       };
-    } else if (Array.isArray(response.data)) {
-      return { 
-        users: response.data, 
-        total: response.data.length
-      };
+    }
+    
+    if (Array.isArray(response.data)) {
+      return { users: response.data, total: response.data.length };
     }
     
     throw new UserServiceError('Structure de réponse inattendue', 'UNEXPECTED_STRUCTURE');
     
   } catch (error: any) {
-    console.error('❌ [UserService] Erreur récupération utilisateurs:', error);
-    
-    if (error.response?.status === 401) {
-      throw new UserServiceError('Non autorisé', 'UNAUTHORIZED', 401);
-    }
-    
-    throw new UserServiceError(
-      'Impossible de récupérer les utilisateurs', 
-      'FETCH_ERROR', 
-      error.response?.status
-    );
-  }
-};
-
-export const getUserById = async (id: number): Promise<User> => {
-  if (!id || id <= 0) {
-    throw new UserServiceError('ID invalide', 'INVALID_ID');
-  }
-  
-  try {
-    const response = await api.get<User>(`/users/${id}`);
-    return response.data;
-  } catch (error: any) {
-    if (error.response?.status === 404) {
-      throw new UserServiceError('Utilisateur non trouvé', 'NOT_FOUND', 404);
-    }
-    throw new UserServiceError(
-      'Impossible de récupérer l\'utilisateur', 
-      'FETCH_ERROR', 
-      error.response?.status
-    );
+    console.error('❌ Erreur récupération utilisateurs:', error);
+    throw error;
   }
 };
 
 export const updateUser = async (id: number, data: UpdateUserData): Promise<User> => {
-  if (!id || id <= 0) {
-    throw new UserServiceError('ID invalide', 'INVALID_ID');
-  }
-
-  if (data.email && !validateEmail(data.email)) {
-    throw new UserServiceError('Email invalide', 'VALIDATION_ERROR');
-  }
-  
-  if (data.phone && !validatePhone(data.phone)) {
-    throw new UserServiceError('Téléphone invalide', 'VALIDATION_ERROR');
-  }
-
-  const payload: any = { ...data };
-  if (payload.email) payload.email = payload.email.toLowerCase().trim();
-  if (payload.fullName) payload.fullName = payload.fullName.trim();
-  if (payload.phone) payload.phone = payload.phone.trim();
-
   try {
-    const response = await api.put<User>(`/users/${id}`, payload);
+    const response = await api.put<User>(`/users/${id}`, data);
     return response.data;
   } catch (error: any) {
-    if (error.response?.status === 404) {
-      throw new UserServiceError('Utilisateur non trouvé', 'NOT_FOUND', 404);
-    }
-    throw new UserServiceError(
-      'Impossible de mettre à jour l\'utilisateur', 
-      'UPDATE_ERROR', 
-      error.response?.status
-    );
+    console.error('❌ Erreur mise à jour utilisateur:', error);
+    throw error;
   }
 };
 
 export const testAPIConnection = async (): Promise<{ connected: boolean; message: string }> => {
   try {
     await api.get('/', { timeout: 5000 });
-    return { connected: true, message: 'Serveur OK' };
+    return { connected: true, message: 'Serveur accessible' };
   } catch (error) {
     return { connected: false, message: 'Serveur non accessible' };
   }
 };
 
+// ==============================
+// DEBUG UTILITIES
+// ==============================
+
+export const debugAuth = (): void => {
+  console.group('🔍 DEBUG AUTHENTIFICATION');
+  
+  console.log('📦 LOCALSTORAGE:');
+  Object.values(STORAGE_KEYS).forEach(key => {
+    const value = localStorage.getItem(key);
+    console.log(`  ${key}:`, value?.substring(0, 100) + (value && value.length > 100 ? '...' : ''));
+  });
+  
+  const token = getAuthToken();
+  console.log('🔑 TOKEN:', token ? `${token.substring(0, 50)}...` : 'NULL');
+  console.log('✅ Authentifié:', isAuthenticated());
+  console.log('👤 Utilisateur:', getCurrentUserFromStorage()?.email || 'NULL');
+  
+  console.groupEnd();
+};
+
+// Export pour console debug
+if (typeof window !== 'undefined') {
+  (window as any).debugAuth = debugAuth;
+}
+
 // Export par défaut
 export default {
   loginUser,
   logoutUser,
-  getCurrentUserFromAPI,
   getCurrentUserFromStorage,
+  getCurrentUserFromAPI,
+  getAuthToken,
   isAuthenticated,
-  refreshUserData,
   registerUser,
-  testAPIConnection,
+  refreshUserData,
   getUsers,
-  getUserById,
   updateUser,
+  testAPIConnection,
+  debugAuth,
   UserServiceError,
 };

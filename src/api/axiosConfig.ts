@@ -1,100 +1,94 @@
-// src/api/axiosConfig.ts
+// src/api/axiosConfig.ts - VERSION FINALE CORRIGÉE
 import axios from 'axios';
-import type { InternalAxiosRequestConfig, AxiosResponse, AxiosError } from 'axios';
 
 // ==============================
-// CONFIGURATION AXIOS POUR SYMFONY
+// CONFIGURATION AXIOS
 // ==============================
 
-// Créez l'instance axios avec la configuration pour Symfony
 const api = axios.create({
   baseURL: 'https://morocancryptobackend-production-f3b6.up.railway.app/api',
   headers: {
     'Content-Type': 'application/json',
-    //'Accept': 'application/json',
-    //'X-Requested-With': 'XMLHttpRequest',
   },
   timeout: 30000,
-  withCredentials: true, // ← CRITIQUE : permet d'envoyer/recevoir les cookies (sessions Symfony)
 });
 
 // ==============================
-// INTERCEPTEURS DE REQUÊTE
+// INTERCEPTEUR REQUÊTE
 // ==============================
 
 api.interceptors.request.use(
-  (config: InternalAxiosRequestConfig) => {
+  (config) => {
     // Log de la requête
-    console.log(`📤 [SYMFONY API] ${config.method?.toUpperCase()} ${config.baseURL}${config.url}`);
+    console.log(`📤 [API] ${config.method?.toUpperCase()} ${config.url}`);
     
-    // Vérifiez et loguez les cookies disponibles
-    const cookies = document.cookie;
-    if (cookies) {
-      const phpSession = cookies.split(';').find(c => c.trim().startsWith('PHPSESSID'));
-      if (phpSession) {
-        console.log('🍪 Session PHP active:', phpSession.substring(0, 30) + '...');
-      } else {
-        console.log('🍪 Aucune session PHP trouvée');
-      }
+    // N'ajoutez PAS le header Authorization pour login_check
+    if (config.url?.includes('login_check')) {
+      console.log('🔓 Pas de token pour login_check');
+      return config;
     }
     
-    // Pour Symfony, on utilise les cookies, pas le header Authorization
-    // NE PAS ajouter Authorization: Bearer ... car Symfony utilise les sessions
+    // Récupérez le token depuis localStorage
+    const token = localStorage.getItem('authToken');
     
-    // Vérifiez que withCredentials est true pour les requêtes API
-    if (config.url && !config.url.startsWith('http')) {
-      config.withCredentials = true;
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+      console.log(`🔑 Token ajouté: ${token.substring(0, 30)}...`);
+    } else {
+      console.warn(`⚠️ Pas de token pour ${config.url}`);
+      
+      // Si c'est une route protégée, prévenez
+      const protectedRoutes = ['/user_bank_details', '/me', '/ads', '/dashboard'];
+      const isProtected = protectedRoutes.some(route => config.url?.includes(route));
+      
+      if (isProtected) {
+        console.error('❌ Tentative d\'accès à une route protégée sans token!');
+      }
     }
     
     return config;
   },
-  (error: AxiosError) => {
+  (error) => {
     console.error('❌ Erreur intercepteur requête:', error);
     return Promise.reject(error);
   }
 );
 
 // ==============================
-// INTERCEPTEURS DE RÉPONSE
+// INTERCEPTEUR RÉPONSE
 // ==============================
 
 api.interceptors.response.use(
-  (response: AxiosResponse) => {
-    // Log de la réponse réussie
-    console.log(`✅ [SYMFONY API] ${response.status} ${response.config.url}`);
-    
-    // Vérifiez les cookies dans les headers de réponse
-    const setCookieHeader = response.headers['set-cookie'];
-    if (setCookieHeader) {
-      console.log('🍪 Cookies reçus du serveur:', Array.isArray(setCookieHeader) ? setCookieHeader.join(', ') : setCookieHeader);
+  (response) => {
+    // Log des réponses réussies
+    if (response.config.url?.includes('/user_bank_details')) {
+      console.log(`✅ [API] ${response.status} ${response.config.url}: Données reçues`);
     }
-    
     return response;
   },
-  (error: AxiosError) => {
-    // Log détaillé de l'erreur
+  (error) => {
+    // Log détaillé des erreurs
     if (error.response) {
-      const { status, statusText, data, headers } = error.response;
+      const { status, data } = error.response;
       const url = error.config?.url;
-      const method = error.config?.method?.toUpperCase();
       
-      console.error(`❌ [SYMFONY API] Erreur ${method} ${url}:`, {
-        status,
-        statusText,
-        data,
-        headers: headers['set-cookie'] ? 'Cookies présents' : 'Pas de cookies'
+      console.error(`❌ [API] Erreur ${status} ${url}:`, {
+        message: data?.message || data?.detail,
+        data: data
       });
       
-      // Gestion spécifique des erreurs Symfony
+      // Gestion spécifique des erreurs
       if (status === 401) {
-        console.error('🔐 Non authentifié - Session Symfony expirée ou invalide');
+        console.error('🔐 Non authentifié - Token expiré ou invalide');
         
-        // Nettoyage local
+        // Nettoyage du localStorage
+        localStorage.removeItem('authToken');
         localStorage.removeItem('user');
         localStorage.removeItem('isAuthenticated');
         
-        // Redirection si ce n'est pas déjà la page de login
-        if (window.location.pathname !== '/login' && 
+        // Redirection vers login si nécessaire
+        if (typeof window !== 'undefined' && 
+            window.location.pathname !== '/login' && 
             window.location.pathname !== '/register') {
           console.log('🔄 Redirection vers /login');
           setTimeout(() => {
@@ -107,20 +101,12 @@ api.interceptors.response.use(
         console.error('🚫 Accès interdit - Vérifiez vos permissions');
       }
       
-      if (status === 404) {
-        console.error('🔍 Endpoint non trouvé');
-      }
-      
-      if (status === 419 || status === 440) {
-        console.error('⏰ Session expirée - Page expirée');
-      }
-      
       if (status === 422) {
-        console.error('📋 Erreur de validation:', data);
+        console.error('📋 Erreur de validation:', data?.violations);
       }
       
       if (status >= 500) {
-        console.error('💥 Erreur serveur Symfony');
+        console.error('💥 Erreur serveur');
       }
     } else if (error.request) {
       console.error('🌐 Pas de réponse du serveur - Vérifiez la connexion');
@@ -137,59 +123,44 @@ api.interceptors.response.use(
 // ==============================
 
 /**
- * Vérifie si une session Symfony est active
+ * Vérifie si l'utilisateur est authentifié
  */
-export const checkSymfonySession = (): boolean => {
-  const hasPhpSession = document.cookie.includes('PHPSESSID');
-  const hasUser = !!localStorage.getItem('user');
+export const checkAuthStatus = (): boolean => {
+  const token = localStorage.getItem('authToken');
+  const user = localStorage.getItem('user');
+  const isAuth = localStorage.getItem('isAuthenticated') === 'true';
   
-  console.log('🔍 Vérification session Symfony:', {
-    hasPhpSession,
-    hasUser,
-    cookies: document.cookie.split(';').map(c => c.trim())
+  console.log('🔍 Vérification auth:', {
+    hasToken: !!token,
+    hasUser: !!user,
+    isAuthFlag: isAuth
   });
   
-  return hasPhpSession && hasUser;
+  return !!(token && user && isAuth);
 };
 
 /**
- * Nettoie complètement la session
+ * Nettoie toutes les données d'authentification
  */
-export const clearSymfonySession = (): void => {
-  console.log('🧹 Nettoyage session Symfony...');
+export const clearAuthData = (): void => {
+  const keys = ['authToken', 'user', 'isAuthenticated', 'authTimestamp'];
   
-  // Nettoyage localStorage
-  localStorage.removeItem('user');
-  localStorage.removeItem('isAuthenticated');
-  localStorage.removeItem('authTimestamp');
-  
-  // Nettoyage cookies
-  document.cookie.split(';').forEach(cookie => {
-    const name = cookie.split('=')[0].trim();
-    document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
+  keys.forEach(key => {
+    localStorage.removeItem(key);
   });
   
-  console.log('✅ Session nettoyée');
+  console.log('🧹 Données d\'authentification nettoyées');
 };
 
 /**
- * Teste la connexion à l'API Symfony
+ * Teste la connexion à l'API
  */
-export const testSymfonyConnection = async (): Promise<boolean> => {
+export const testConnection = async (): Promise<{ connected: boolean; message: string }> => {
   try {
-    console.log('🧪 Test connexion Symfony API...');
-    
-    const response = await api.get('/');
-    
-    console.log('✅ API Symfony accessible:', {
-      status: response.status,
-      data: response.data
-    });
-    
-    return true;
+    const response = await api.get('/', { timeout: 5000 });
+    return { connected: true, message: `API accessible (${response.status})` };
   } catch (error) {
-    console.error('❌ API Symfony inaccessible:', error);
-    return false;
+    return { connected: false, message: 'API non accessible' };
   }
 };
 
@@ -198,3 +169,4 @@ export const testSymfonyConnection = async (): Promise<boolean> => {
 // ==============================
 
 export default api;
+//export { checkAuthStatus, clearAuthData, testConnection };
