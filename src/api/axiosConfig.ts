@@ -11,8 +11,8 @@ const api = axios.create({
   baseURL: 'https://morocancryptobackend-production-f3b6.up.railway.app/api',
   headers: {
     'Content-Type': 'application/json',
-    'Accept': 'application/json',
-    'X-Requested-With': 'XMLHttpRequest',
+    //'Accept': 'application/json',
+    //'X-Requested-With': 'XMLHttpRequest',
   },
   timeout: 30000,
   withCredentials: true, // ← CRITIQUE : permet d'envoyer/recevoir les cookies (sessions Symfony)
