@@ -1,4 +1,4 @@
-// src/api/UserService.ts - VERSION FINALE CORRIGÉE
+// src/api/UserService.ts - VERSION CORRIGÉE COMPLÈTE
 import api from './axiosConfig';
 import type { User } from '../types/User';
 
@@ -56,7 +56,7 @@ const STORAGE_KEYS = {
 } as const;
 
 // ==============================
-// AUTHENTIFICATION (CORRIGÉ)
+// AUTHENTIFICATION - CORRIGÉE
 // ==============================
 
 export const loginUser = async (email: string, password: string): Promise<LoginResponse> => {
@@ -67,98 +67,72 @@ export const loginUser = async (email: string, password: string): Promise<LoginR
     console.log('📤 Envoi à /login_check');
     console.log('👤 Email:', email);
 
-    // FORMAT CORRECT : email/password (comme PowerShell)
+    // CORRECTION CRITIQUE : email/password (pas username/password)
     const response = await api.post('/login_check', {
-      email: email,      // ← VOTRE BACKEND ATTEND "email" PAS "username"
+      email: email,      // ← FORMAT CORRECT (comme test HTML)
       password: password
     });
 
     const responseTime = Date.now() - startTime;
     console.log(`✅ Connexion réussie en ${responseTime}ms`);
     
-    // VÉRIFICATION CRITIQUE : Analyse de la réponse
-    console.log('📥 Réponse du backend:', response.data);
+    // Analyse réponse
+    console.log('📥 Réponse:', response.data);
     
-    // VOTRE BACKEND RETOURNE { token: "...", user: {...} }
+    // Votre backend retourne { token: "...", user: {...} }
     const responseData = response.data;
     const token = responseData.token;
     const user = responseData.user;
     
     if (!token) {
-      console.error('❌ AUCUN TOKEN dans la réponse!');
-      console.error('Structure réponse:', responseData);
+      console.error('❌ Pas de token dans la réponse!');
       throw new UserServiceError('Token non reçu du serveur', 'NO_TOKEN');
     }
 
-    if (!user) {
-      console.warn('⚠️ Pas d\'objet user dans la réponse');
-      // Créer un user basique
-      const basicUser: User = {
-        id: 0,
-        email: email,
-        fullName: email.split('@')[0],
-        roles: ['ROLE_USER'],
-        isVerified: false,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        reputation: 5.0,
-        phone: ''
-      };
-      responseData.user = basicUser;
-    }
-
     console.log('🔑 Token JWT reçu:', token.substring(0, 50) + '...');
-    console.log('👤 Utilisateur:', user.email);
+    console.log('👤 Utilisateur:', user?.email || 'non spécifié');
     
-    // STOCKAGE CRITIQUE : MÊMES CLÉS QUE PowerShell
+    // Stockage
     localStorage.setItem(STORAGE_KEYS.TOKEN, token);
-    localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+    localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user || { email }));
     localStorage.setItem(STORAGE_KEYS.IS_AUTHENTICATED, 'true');
     localStorage.setItem(STORAGE_KEYS.AUTH_TIMESTAMP, Date.now().toString());
 
     console.log('💾 Stockage réussi');
-    console.log('📊 Vérification storage:');
-    console.log('   authToken:', localStorage.getItem(STORAGE_KEYS.TOKEN)?.substring(0, 30) + '...');
-    console.log('   user:', localStorage.getItem(STORAGE_KEYS.USER)?.substring(0, 50) + '...');
-    
     console.groupEnd();
-    return { token, user };
+    
+    return { token, user: user || { email, id: 0, fullName: email.split('@')[0], roles: ['ROLE_USER'], isVerified: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), reputation: 5.0, phone: '' } };
 
   } catch (error: any) {
     console.groupEnd();
     console.error('❌ Erreur connexion:', error);
     
-    // Nettoyage en cas d'erreur
+    // Log détaillé
+    if (error.response) {
+      console.error('📊 Détails:', {
+        status: error.response.status,
+        data: error.response.data,
+        requestData: error.config?.data, // Voir CE QUI A ÉTÉ ENVOYÉ
+        url: error.config?.url
+      });
+    }
+    
+    // Nettoyage
     localStorage.removeItem(STORAGE_KEYS.TOKEN);
     localStorage.removeItem(STORAGE_KEYS.USER);
     localStorage.removeItem(STORAGE_KEYS.IS_AUTHENTICATED);
     
-    // Gestion des erreurs
-    if (error.response) {
-      const { status, data } = error.response;
-      
-      switch (status) {
-        case 401:
-          throw new UserServiceError(
-            'Email ou mot de passe incorrect',
-            'UNAUTHORIZED',
-            status
-          );
-        
-        case 400:
-          throw new UserServiceError(
-            'Format de requête incorrect. Utilisez email/password',
-            'BAD_REQUEST',
-            status
-          );
-        
-        default:
-          throw new UserServiceError(
-            data?.message || `Erreur serveur (${status})`,
-            'HTTP_ERROR',
-            status
-          );
-      }
+    // Gestion erreurs
+    if (error.response?.status === 401) {
+      throw new UserServiceError('Email ou mot de passe incorrect', 'UNAUTHORIZED', 401);
+    }
+    
+    if (error.response?.status === 400) {
+      throw new UserServiceError(
+        'Format de requête incorrect. Utilisez email/password',
+        'BAD_REQUEST',
+        400
+      );
     }
     
     if (error.code === 'ERR_NETWORK') {
@@ -176,19 +150,19 @@ export const logoutUser = (): void => {
   console.group('👋 Déconnexion');
   
   try {
-    // Appel API logout si disponible
+    // Appel API logout
     api.post('/auth/logout', {}).catch(() => {
       console.log('ℹ️ Endpoint /auth/logout non disponible');
     });
     
-    // Nettoyage COMPLET
+    // Nettoyage
     Object.values(STORAGE_KEYS).forEach(key => {
       localStorage.removeItem(key);
     });
     
     console.log('✅ Déconnexion réussie');
     
-    // Redirection vers login
+    // Redirection
     setTimeout(() => {
       window.location.href = '/login';
     }, 500);
@@ -247,7 +221,7 @@ const validateEmail = (email: string): boolean =>
   /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
 const validatePhone = (phone: string): boolean => 
-  /^212\d{9}$/.test(phone);  // Format: 212XXXXXXXXX
+  /^212\d{9}$/.test(phone);
 
 const validatePassword = (password: string): boolean => 
   password.length >= 6;
@@ -387,7 +361,7 @@ export const debugAuth = (): void => {
   console.groupEnd();
 };
 
-// Export pour console debug
+// Export pour console
 if (typeof window !== 'undefined') {
   (window as any).debugAuth = debugAuth;
 }
