@@ -1,4 +1,4 @@
-// src/api/UserService.ts - VERSION FINALE OPTIMISÉE
+// src/api/UserService.ts - VERSION COMPLÈTE OPTIMISÉE AVEC refreshCurrentUser
 import api from './axiosConfig';
 import type { User } from '../types/User';
 
@@ -27,6 +27,13 @@ export interface UpdateUserData {
   roles?: string[];
   isActive?: boolean;
   walletAddress?: string;
+  avatarUrl?: string;
+}
+
+export interface RefreshUserResponse {
+  success: boolean;
+  user: User | null;
+  error?: string;
 }
 
 export class UserServiceError extends Error {
@@ -44,7 +51,7 @@ export class UserServiceError extends Error {
 }
 
 // ==============================
-// CONSTANTS - OPTIMISÉES
+// CONSTANTS
 // ==============================
 
 const STORAGE_KEYS = {
@@ -60,11 +67,12 @@ const AUTH_CONFIG = {
   LOGIN_ENDPOINT: '/login_check',
   ME_ENDPOINT: '/users/me',
   LOGOUT_ENDPOINT: '/auth/logout',
-  TOKEN_TTL: 3600 // 1 heure en secondes
+  TOKEN_TTL: 3600,
+  REFRESH_TIMEOUT: 10000 // 10 secondes
 } as const;
 
 // ==============================
-// JWT UTILITIES - OPTIMISÉES
+// JWT UTILITIES
 // ==============================
 
 const decodeJWT = (token: string): any => {
@@ -89,18 +97,17 @@ const isTokenExpired = (token: string): boolean => {
   if (!payload || !payload.exp) return true;
   
   const now = Math.floor(Date.now() / 1000);
-  const buffer = 60; // 60 secondes de buffer
+  const buffer = 60;
   return payload.exp <= (now + buffer);
 };
 
 // ==============================
-// STORAGE MANAGEMENT - OPTIMISÉ
+// STORAGE MANAGEMENT
 // ==============================
 
 const saveAuthData = (token: string, user: User): void => {
   const payload = decodeJWT(token);
   
-  // Calculer l'expiration
   const expiresAt = payload?.exp ? payload.exp * 1000 : Date.now() + (AUTH_CONFIG.TOKEN_TTL * 1000);
   
   localStorage.setItem(STORAGE_KEYS.TOKEN, token);
@@ -108,7 +115,6 @@ const saveAuthData = (token: string, user: User): void => {
   localStorage.setItem(STORAGE_KEYS.EXPIRES_AT, expiresAt.toString());
   localStorage.setItem(STORAGE_KEYS.AUTH_TYPE, 'jwt');
   
-  // Mettre à jour les headers axios
   api.defaults.headers.common['Authorization'] = `${AUTH_CONFIG.TOKEN_PREFIX} ${token}`;
 };
 
@@ -120,41 +126,28 @@ const clearAuthData = (): void => {
 };
 
 // ==============================
-// AUTHENTIFICATION - VERSION OPTIMISÉE POUR VOTRE API
+// AUTHENTIFICATION
 // ==============================
 
 export const loginUser = async (email: string, password: string): Promise<LoginResponse> => {
-  const startTime = Date.now();
-  
   try {
-    console.group('🔐 [UserService] Connexion utilisateur');
+    console.log('🔐 [UserService] Connexion utilisateur:', email);
     
-    // FORMAT VALIDÉ PAR TESTS : {"email": "...", "password": "..."}
     const requestData = {
       email: email.trim(),
       password: password
     };
     
-    console.log('📤 Envoi à /login_check:', { email: requestData.email });
-    
     const response = await api.post(AUTH_CONFIG.LOGIN_ENDPOINT, requestData);
-    
-    const responseTime = Date.now() - startTime;
-    console.log(`✅ Connexion réussie en ${responseTime}ms`);
     
     const { token } = response.data;
     
     if (!token) {
-      console.error('❌ Pas de token dans la réponse');
       throw new UserServiceError('Token non reçu du serveur', 'NO_TOKEN', 400);
     }
     
-    console.log('🔑 Token JWT reçu:', token.substring(0, 30) + '...');
-    
-    // Décode le token pour extraire les infos utilisateur
     const payload = decodeJWT(token);
     
-    // Construction de l'objet utilisateur
     const user: User = {
       id: payload?.id || 0,
       email: payload?.email || payload?.username || email,
@@ -166,44 +159,29 @@ export const loginUser = async (email: string, password: string): Promise<LoginR
       reputation: payload?.reputation || 5.0,
       phone: payload?.phone || '',
       walletAddress: payload?.walletAddress || '',
-      isActive: payload?.isActive !== false
+      isActive: payload?.isActive !== false,
+      //avatarUrl: payload?.avatarUrl || ''
     };
     
-    console.log('👤 Utilisateur construit:', user.email);
-    
-    // Sauvegarde des données
     saveAuthData(token, user);
     
-    // Tentative de récupération des infos complètes via /api/me
     try {
       const meResponse = await api.get(AUTH_CONFIG.ME_ENDPOINT);
       if (meResponse.data?.user) {
-        const apiUser = meResponse.data.user;
-        // Fusionner les données
-        Object.assign(user, apiUser);
+        Object.assign(user, meResponse.data.user);
         localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
-        console.log('✅ Données utilisateur complétées via /api/me');
       }
     } catch (meError: any) {
-      // Ignorer les erreurs 500 de /api/me (problème connu)
-      if (meError.response?.status !== 500) {
-        console.warn('⚠️ /api/me non accessible:', meError.message);
-      }
+      // Ignorer les erreurs
     }
     
-    console.groupEnd();
     return { token, user };
     
   } catch (error: any) {
-    console.groupEnd();
-    
-    // Nettoyage en cas d'erreur
     clearAuthData();
     
-    // Gestion détaillée des erreurs
     if (error.response) {
       const { status, data } = error.response;
-      console.error('❌ Erreur serveur:', { status, data });
       
       switch (status) {
         case 400:
@@ -235,33 +213,24 @@ export const loginUser = async (email: string, password: string): Promise<LoginR
     
     if (error.code === 'ERR_NETWORK') {
       throw new UserServiceError(
-        'Impossible de se connecter au serveur. Vérifiez votre connexion internet.',
+        'Impossible de se connecter au serveur',
         'NETWORK_ERROR'
       );
     }
     
     throw new UserServiceError(
-      error.message || 'Erreur inconnue lors de la connexion',
+      error.message || 'Erreur inconnue',
       'UNKNOWN_ERROR'
     );
   }
 };
 
 export const logoutUser = (redirectToLogin: boolean = true): void => {
-  console.group('👋 [UserService] Déconnexion');
-  
   try {
-    // Tentative de déconnexion côté serveur (silencieuse)
-    api.post(AUTH_CONFIG.LOGOUT_ENDPOINT, {}).catch(() => {
-      // Ignorer les erreurs
-    });
+    api.post(AUTH_CONFIG.LOGOUT_ENDPOINT, {}).catch(() => {});
     
-    // Nettoyage local
     clearAuthData();
     
-    console.log('✅ Déconnexion réussie');
-    
-    // Redirection optionnelle
     if (redirectToLogin && typeof window !== 'undefined') {
       setTimeout(() => {
         window.location.href = '/login';
@@ -270,13 +239,11 @@ export const logoutUser = (redirectToLogin: boolean = true): void => {
     
   } catch (error) {
     console.error('⚠️ Erreur lors de la déconnexion:', error);
-  } finally {
-    console.groupEnd();
   }
 };
 
 // ==============================
-// GETTERS & CHECKERS - OPTIMISÉS
+// GETTERS & CHECKERS
 // ==============================
 
 export const getCurrentUser = (): User | null => {
@@ -301,18 +268,14 @@ export const isAuthenticated = (): boolean => {
   
   if (!token) return false;
   
-  // Vérifier l'expiration
   if (isTokenExpired(token)) {
-    console.warn('⚠️ Token expiré, nettoyage...');
     clearAuthData();
     return false;
   }
   
-  // Vérifier l'utilisateur
   const user = getCurrentUser();
   if (!user) return false;
   
-  // Vérifier la cohérence avec le localStorage
   const storedExpiresAt = localStorage.getItem(STORAGE_KEYS.EXPIRES_AT);
   if (storedExpiresAt) {
     const expiresAt = parseInt(storedExpiresAt, 10);
@@ -325,37 +288,94 @@ export const isAuthenticated = (): boolean => {
   return true;
 };
 
-export const getAuthHeaders = (): Record<string, string> => {
-  const token = getAuthToken();
-  if (!token) return {};
-  
-  return {
-    'Authorization': `${AUTH_CONFIG.TOKEN_PREFIX} ${token}`,
-    'Content-Type': 'application/json',
-    'Accept': 'application/json'
-  };
+// ==============================
+// NOUVELLE FONCTION : refreshCurrentUser
+// ==============================
+
+/**
+ * Rafraîchit les données utilisateur depuis l'API
+ * Compatible avec AuthContext et UserBankDetails
+ */
+export const refreshCurrentUser = async (): Promise<User | null> => {
+  try {
+    console.log('🔄 [UserService] Rafraîchissement utilisateur depuis API...');
+    
+    const token = getAuthToken();
+    if (!token) {
+      console.log('❌ [UserService] Aucun token disponible pour rafraîchissement');
+      return null;
+    }
+    
+    // Vérifier si le token est encore valide
+    if (isTokenExpired(token)) {
+      console.log('⚠️ [UserService] Token expiré, déconnexion...');
+      clearAuthData();
+      return null;
+    }
+    
+    // Appel API pour récupérer les données utilisateur à jour
+    const response = await api.get(AUTH_CONFIG.ME_ENDPOINT, {
+      timeout: AUTH_CONFIG.REFRESH_TIMEOUT
+    });
+    
+    if (!response.data) {
+      throw new Error('Aucune donnée reçue du serveur');
+    }
+    
+    // Extraire les données utilisateur (adaptez selon votre API)
+    const userData: User = response.data.user || response.data;
+    
+    if (!userData || !userData.email) {
+      throw new Error('Données utilisateur invalides');
+    }
+    
+    // Mettre à jour le localStorage
+    localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(userData));
+    
+    console.log('✅ [UserService] Utilisateur rafraîchi:', userData.email);
+    console.log('📊 [UserService] Rôles mis à jour:', userData.roles);
+    
+    return userData;
+    
+  } catch (error: any) {
+    console.error('❌ [UserService] Erreur rafraîchissement utilisateur:', error);
+    
+    // Ne pas déconnecter en cas d'erreur réseau ou serveur temporaire
+    if (error.code === 'ERR_NETWORK' || error.code === 'ECONNABORTED') {
+      console.log('🌐 [UserService] Erreur réseau, conservation données locales');
+      return getCurrentUser(); // Retourner données locales
+    }
+    
+    // Si erreur 401, le token est invalide
+    if (error.response?.status === 401) {
+      console.log('🔐 [UserService] Token invalide, déconnexion...');
+      clearAuthData();
+      return null;
+    }
+    
+    // Pour les autres erreurs, retourner l'utilisateur local
+    return getCurrentUser();
+  }
 };
 
+// Alias pour compatibilité avec le code existant
+export const refreshUserData = refreshCurrentUser;
+
 // ==============================
-// REGISTRATION - OPTIMISÉE
+// REGISTRATION
 // ==============================
 
 const validateEmail = (email: string): boolean => 
   /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
 const validatePhone = (phone: string): boolean => 
-  /^212\d{9}$/.test(phone);  // Format marocain
+  /^212\d{9}$/.test(phone);
 
 const validatePassword = (password: string): boolean => 
   password.length >= 6;
 
 export const registerUser = async (data: RegisterUserData): Promise<User> => {
-  const startTime = Date.now();
-  
   try {
-    console.group('📝 [UserService] Inscription utilisateur');
-    
-    // Validation
     const errors: string[] = [];
     
     if (!data.fullName?.trim() || data.fullName.trim().length < 2) {
@@ -378,7 +398,6 @@ export const registerUser = async (data: RegisterUserData): Promise<User> => {
       throw new UserServiceError(errors.join('. '), 'VALIDATION_ERROR', 400);
     }
     
-    // Préparation des données
     const payload = {
       fullName: data.fullName.trim(),
       email: data.email.toLowerCase().trim(),
@@ -390,26 +409,17 @@ export const registerUser = async (data: RegisterUserData): Promise<User> => {
       isActive: true
     };
     
-    console.log('📤 Envoi inscription...');
     const response = await api.post<User>('/users', payload);
     
-    const responseTime = Date.now() - startTime;
-    console.log(`✅ Inscription réussie en ${responseTime}ms:`, response.data.email);
-    
-    // Connexion automatique après inscription
     try {
-      const loginResult = await loginUser(data.email, data.password);
-      console.log('🔐 Connexion automatique réussie après inscription');
+      await loginUser(data.email, data.password);
     } catch (loginError) {
-      console.warn('⚠️ Connexion automatique échouée, mais inscription réussie');
+      // Ignorer erreur connexion auto
     }
     
-    console.groupEnd();
     return response.data;
     
   } catch (error: any) {
-    console.groupEnd();
-    
     if (error.response?.data?.violations) {
       const messages = error.response.data.violations
         .map((v: any) => `${v.propertyPath}: ${v.message}`)
@@ -417,83 +427,26 @@ export const registerUser = async (data: RegisterUserData): Promise<User> => {
       throw new UserServiceError(messages, 'VALIDATION_ERROR', error.response.status);
     }
     
-    if (error.response?.data?.['hydra:description']) {
-      throw new UserServiceError(
-        error.response.data['hydra:description'],
-        'API_ERROR',
-        error.response.status
-      );
-    }
-    
-    if (error.code === 'ERR_NETWORK') {
-      throw new UserServiceError('Impossible de se connecter au serveur', 'NETWORK_ERROR');
-    }
-    
     throw error;
   }
 };
 
 // ==============================
-// USER MANAGEMENT - OPTIMISÉ
+// USER MANAGEMENT
 // ==============================
-
-export const refreshUserData = async (): Promise<User | null> => {
-  try {
-    console.log('🔄 [UserService] Rafraîchissement données utilisateur...');
-    
-    if (!isAuthenticated()) {
-      console.warn('⚠️ Non authentifié, impossible de rafraîchir');
-      return null;
-    }
-    
-    // Essayer /api/me d'abord
-    try {
-      const response = await api.get(AUTH_CONFIG.ME_ENDPOINT);
-      if (response.data?.user) {
-        const user = response.data.user;
-        localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
-        console.log('✅ Données utilisateur rafraîchies depuis /api/me');
-        return user;
-      }
-    } catch (meError: any) {
-      if (meError.response?.status !== 500) {
-        console.warn('⚠️ /api/me inaccessible:', meError.message);
-      }
-    }
-    
-    // Sinon, utiliser les données actuelles
-    const currentUser = getCurrentUser();
-    if (currentUser) {
-      console.log('ℹ️ Utilisation des données utilisateur actuelles');
-      return currentUser;
-    }
-    
-    return null;
-    
-  } catch (error) {
-    console.error('❌ Erreur rafraîchissement:', error);
-    return null;
-  }
-};
 
 export const updateUserProfile = async (userId: number, data: UpdateUserData): Promise<User> => {
   try {
-    console.log(`📝 [UserService] Mise à jour utilisateur ${userId}`);
-    
-    // Validation
     if (data.email && !validateEmail(data.email)) {
       throw new UserServiceError('Email invalide', 'VALIDATION_ERROR', 400);
     }
     
     if (data.phone && !validatePhone(data.phone)) {
-      throw new UserServiceError('Téléphone invalide. Format: 212XXXXXXXXX', 'VALIDATION_ERROR', 400);
+      throw new UserServiceError('Téléphone invalide', 'VALIDATION_ERROR', 400);
     }
     
     const response = await api.put<User>(`/users/${userId}`, data);
     
-    console.log(`✅ Utilisateur ${userId} mis à jour`);
-    
-    // Mettre à jour le storage si c'est l'utilisateur courant
     const currentUser = getCurrentUser();
     if (currentUser?.id === userId) {
       const updatedUser = { ...currentUser, ...response.data };
@@ -510,11 +463,8 @@ export const updateUserProfile = async (userId: number, data: UpdateUserData): P
 
 export const getUsersList = async (page: number = 1, limit: number = 30): Promise<{ users: User[]; total: number }> => {
   try {
-    console.log(`🔍 [UserService] Récupération utilisateurs page ${page}...`);
-    
     const response = await api.get<any>(`/users?page=${page}&itemsPerPage=${limit}`);
     
-    // Gestion format Hydra (API Platform)
     if (response.data?.['hydra:member']) {
       return {
         users: response.data['hydra:member'],
@@ -522,7 +472,6 @@ export const getUsersList = async (page: number = 1, limit: number = 30): Promis
       };
     }
     
-    // Format simple array
     if (Array.isArray(response.data)) {
       return {
         users: response.data,
@@ -540,8 +489,6 @@ export const getUsersList = async (page: number = 1, limit: number = 30): Promis
 
 export const getUserById = async (id: number): Promise<User> => {
   try {
-    console.log(`🔍 [UserService] Récupération utilisateur ${id}...`);
-    
     const response = await api.get<User>(`/users/${id}`);
     return response.data;
     
@@ -552,7 +499,78 @@ export const getUserById = async (id: number): Promise<User> => {
 };
 
 // ==============================
-// UTILITIES & DEBUG
+// ADMIN MANAGEMENT FUNCTIONS
+// ==============================
+
+export const promoteToAdmin = async (userId: number): Promise<User> => {
+  try {
+    const response = await api.patch<User>(`/users/${userId}/promote`, {
+      roles: ['ROLE_ADMIN', 'ROLE_USER']
+    });
+    return response.data;
+  } catch (error: any) {
+    console.error(`❌ Erreur promotion admin ${userId}:`, error);
+    throw error;
+  }
+};
+
+export const demoteFromAdmin = async (userId: number): Promise<User> => {
+  try {
+    const response = await api.patch<User>(`/users/${userId}/demote`, {
+      roles: ['ROLE_USER']
+    });
+    return response.data;
+  } catch (error: any) {
+    console.error(`❌ Erreur rétrogradation admin ${userId}:`, error);
+    throw error;
+  }
+};
+
+export const deleteUser = async (userId: number): Promise<void> => {
+  try {
+    await api.delete(`/users/${userId}`);
+  } catch (error: any) {
+    console.error(`❌ Erreur suppression utilisateur ${userId}:`, error);
+    throw error;
+  }
+};
+
+export const activateUser = async (userId: number): Promise<User> => {
+  try {
+    const response = await api.patch<User>(`/users/${userId}/activate`, {
+      isActive: true
+    });
+    return response.data;
+  } catch (error: any) {
+    console.error(`❌ Erreur activation utilisateur ${userId}:`, error);
+    throw error;
+  }
+};
+
+export const deactivateUser = async (userId: number): Promise<User> => {
+  try {
+    const response = await api.patch<User>(`/users/${userId}/deactivate`, {
+      isActive: false
+    });
+    return response.data;
+  } catch (error: any) {
+    console.error(`❌ Erreur désactivation utilisateur ${userId}:`, error);
+    throw error;
+  }
+};
+
+// ==============================
+// ALIAS POUR COMPATIBILITÉ
+// ==============================
+
+// Alias pour getUsers (compatibilité avec code existant)
+export const getUsers = getUsersList;
+
+// Alias pour updateUser (compatibilité)
+export const updateUser = updateUserProfile;
+
+// ==============================
+// UTILITIES
 // ==============================
 
 export const testAPIConnection = async (): Promise<{ 
@@ -563,18 +581,16 @@ export const testAPIConnection = async (): Promise<{
   const startTime = Date.now();
   
   try {
-    const response = await api.get('/', { 
+    await api.get('/', { 
       timeout: 8000,
-      headers: {
-        'Cache-Control': 'no-cache'
-      }
+      headers: { 'Cache-Control': 'no-cache' }
     });
     
     const responseTime = Date.now() - startTime;
     
     return {
       connected: true,
-      message: `API accessible (${response.status})`,
+      message: `API accessible`,
       responseTime
     };
     
@@ -590,76 +606,55 @@ export const testAPIConnection = async (): Promise<{
 export const debugAuth = (): void => {
   console.group('🔍 [UserService] DEBUG AUTHENTIFICATION');
   
-  // Stockage local
-  console.log('📦 LOCALSTORAGE:');
   Object.values(STORAGE_KEYS).forEach(key => {
     const value = localStorage.getItem(key);
-    console.log(`  ${key}:`, value ? 
-      (key === STORAGE_KEYS.TOKEN ? 
-        `${value.substring(0, 30)}...` : 
-        value.substring(0, 100) + (value.length > 100 ? '...' : '')
-      ) : 'NULL'
-    );
+    console.log(`${key}:`, value ? 'présent' : 'NULL');
   });
   
-  // État actuel
-  console.log('📊 ÉTAT:');
-  console.log('  Authentifié:', isAuthenticated());
-  console.log('  Utilisateur:', getCurrentUser()?.email || 'NULL');
+  console.log('Authentifié:', isAuthenticated());
+  console.log('Utilisateur:', getCurrentUser()?.email || 'NULL');
   
-  // Token info
   const token = getAuthToken();
   if (token) {
     const payload = decodeJWT(token);
-    console.log('🔑 TOKEN INFO:');
-    console.log('  Expiré:', isTokenExpired(token));
-    console.log('  Payload:', {
-      email: payload?.email || payload?.username,
-      roles: payload?.roles,
-      exp: payload?.exp ? new Date(payload.exp * 1000).toLocaleString() : 'Non défini'
-    });
+    console.log('Token expiré:', isTokenExpired(token));
+    console.log('Token payload:', payload);
   }
   
   console.groupEnd();
 };
 
 export const forceLogout = (): void => {
-  console.log('🚨 [UserService] Déconnexion forcée');
   clearAuthData();
-  
   if (typeof window !== 'undefined') {
     window.location.href = '/login';
   }
 };
 
-// ==============================
-// INITIALIZATION & AUTO-SETUP
-// ==============================
-
-// Auto-configuration axios avec le token existant
-const initializeAuth = (): void => {
-  const token = getAuthToken();
-  if (token && !isTokenExpired(token)) {
-    api.defaults.headers.common['Authorization'] = `${AUTH_CONFIG.TOKEN_PREFIX} ${token}`;
-    console.log('🔧 [UserService] Token restauré dans axios');
+export const validateAndRefreshAuth = async (): Promise<RefreshUserResponse> => {
+  try {
+    if (!isAuthenticated()) {
+      return { success: false, user: null, error: 'Non authentifié' };
+    }
+    
+    const user = await refreshCurrentUser();
+    
+    if (user) {
+      return { success: true, user };
+    } else {
+      return { success: false, user: null, error: 'Impossible de rafraîchir' };
+    }
+  } catch (error: any) {
+    return { 
+      success: false, 
+      user: null, 
+      error: error.message || 'Erreur inconnue' 
+    };
   }
 };
 
-// Initialisation au chargement
-if (typeof window !== 'undefined') {
-  initializeAuth();
-  
-  // Exposer des fonctions pour le debug
-  (window as any).debugAuth = debugAuth;
-  (window as any).forceLogout = forceLogout;
-  
-  console.log('🚀 UserService initialisé. Commandes disponibles:');
-  console.log('   - debugAuth(): Affiche l\'état d\'authentification');
-  console.log('   - forceLogout(): Force la déconnexion et redirection');
-}
-
 // ==============================
-// EXPORT PAR DÉFAUT
+// DEFAULT EXPORT
 // ==============================
 
 export default {
@@ -669,22 +664,31 @@ export default {
   isAuthenticated,
   getCurrentUser,
   getAuthToken,
-  getAuthHeaders,
   
   // Registration
   registerUser,
   
   // User Management
-  refreshUserData,
+  refreshCurrentUser, // NOUVELLE FONCTION
+  refreshUserData,    // Alias
   updateUserProfile,
+  updateUser, // Alias
   getUsersList,
+  getUsers, // Alias
   getUserById,
+  
+  // Admin Management
+  promoteToAdmin,
+  demoteFromAdmin,
+  deleteUser,
+  activateUser,
+  deactivateUser,
   
   // Utilities
   testAPIConnection,
   debugAuth,
   forceLogout,
-  clearAuthData: () => clearAuthData(),
+  validateAndRefreshAuth,
   
   // Error class
   UserServiceError

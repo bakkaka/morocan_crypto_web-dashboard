@@ -1,39 +1,61 @@
-// src/contexts/AuthContext.tsx
-import React, { createContext, useState, useContext, useEffect, useMemo } from 'react';
+// src/contexts/AuthContext.tsx - VERSION OPTIMISÉE AVEC refreshUser
+import React, { createContext, useState, useContext, useEffect, useMemo, useCallback } from 'react';
 import { 
   loginUser, 
   registerUser, 
   logoutUser, 
-  getCurrentUserFromStorage,
+  getCurrentUser,
+  refreshCurrentUser,
   type LoginResponse,
   type RegisterUserData 
 } from '../api/UserService';
-import type { User } from '../types/User'; // ✅ Import depuis types/User
+import type { User } from '../types/User';
+
+// ==============================
+// TYPES
+// ==============================
 
 interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
   isAdmin: boolean;
   isUser: boolean;
+  loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (userData: RegisterUserData) => Promise<void>;
   logout: () => void;
-  loading: boolean;
   checkAuthStatus: () => Promise<void>;
+  refreshUser: () => Promise<void>; // <-- AJOUTÉ ICI
 }
+
+// ==============================
+// CONTEXT
+// ==============================
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+// ==============================
+// PROVIDER
+// ==============================
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [initialized, setInitialized] = useState<boolean>(false);
 
-  const checkAuthStatus = async (): Promise<void> => {
+  // ==============================
+  // CORE AUTH FUNCTIONS
+  // ==============================
+
+  /**
+   * Vérifie le statut d'authentification au chargement
+   */
+  const checkAuthStatus = useCallback(async (): Promise<void> => {
     try {
       setLoading(true);
       console.log('🔍 [AuthContext] Vérification du statut d\'authentification...');
       
-      const userData = getCurrentUserFromStorage();
+      const userData = getCurrentUser();
       console.log('🔍 [AuthContext] Utilisateur depuis storage:', userData);
       
       setUser(userData);
@@ -50,16 +72,63 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(null);
     } finally {
       setLoading(false);
+      setInitialized(true);
       console.log('🔍 [AuthContext] Vérification terminée - Loading:', false);
     }
-  };
-
-  useEffect(() => {
-    console.log('🚀 [AuthContext] Initialisation du AuthProvider');
-    checkAuthStatus();
   }, []);
 
-  const login = async (email: string, password: string): Promise<void> => {
+  /**
+   * Rafraîchit les données utilisateur depuis l'API
+   * Compatible avec UserBankDetails
+   */
+  const refreshUser = useCallback(async (): Promise<void> => {
+    try {
+      console.log('🔄 [AuthContext] Rafraîchissement des données utilisateur...');
+      
+      const token = localStorage.getItem('jwt_token');
+      if (!token) {
+        console.log('🔐 [AuthContext] Aucun token trouvé, déconnexion...');
+        setUser(null);
+        return;
+      }
+
+      // Vérifier si UserService a une fonction refreshCurrentUser
+      // Sinon, utiliser getCurrentUser ou appeler l'API directement
+      let userData: User | null = null;
+      
+      // Essayer d'abord la fonction de rafraîchissement
+      if (refreshCurrentUser) {
+        userData = await refreshCurrentUser();
+      } else {
+        // Fallback: récupérer depuis le localStorage ou API
+        userData = getCurrentUser();
+        
+        // Si pas dans localStorage, faire un appel API
+        if (!userData) {
+          // Vous devrez peut-être implémenter cette fonction dans UserService
+          // userData = await fetchCurrentUserFromAPI();
+        }
+      }
+      
+      if (userData) {
+        console.log('✅ [AuthContext] Utilisateur rafraîchi:', userData.email);
+        setUser(userData);
+      } else {
+        console.warn('⚠️ [AuthContext] Impossible de rafraîchir l\'utilisateur');
+        // Conserver l'utilisateur actuel si existant
+      }
+      
+    } catch (error) {
+      console.error('❌ [AuthContext] Erreur lors du rafraîchissement:', error);
+      // Ne pas déconnecter en cas d'erreur de rafraîchissement
+      // L'utilisateur peut continuer avec les données en cache
+    }
+  }, []);
+
+  /**
+   * Connexion utilisateur
+   */
+  const login = useCallback(async (email: string, password: string): Promise<void> => {
     try {
       setLoading(true);
       console.log('🔄 [AuthContext] Début de la connexion...', { email });
@@ -82,9 +151,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLoading(false);
       console.log('🏁 [AuthContext] Connexion terminée - Loading:', false);
     }
-  };
+  }, []);
 
-  const register = async (userData: RegisterUserData): Promise<void> => {
+  /**
+   * Inscription utilisateur
+   */
+  const register = useCallback(async (userData: RegisterUserData): Promise<void> => {
     try {
       setLoading(true);
       console.log('📝 [AuthContext] Début de l\'inscription...', { email: userData.email });
@@ -99,44 +171,101 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLoading(false);
       console.log('🏁 [AuthContext] Inscription terminée - Loading:', false);
     }
-  };
+  }, []);
 
-  const logout = (): void => {
+  /**
+   * Déconnexion utilisateur
+   */
+  const logout = useCallback((): void => {
     console.log('👋 [AuthContext] Déconnexion en cours...');
     setUser(null);
     logoutUser();
     console.log('✅ [AuthContext] Déconnexion terminée');
-  };
+  }, []);
 
-  // Calcul des rôles avec useMemo pour optimiser les rendus
+  // ==============================
+  // EFFECTS
+  // ==============================
+
+  /**
+   * Initialisation au montage du composant
+   */
+  useEffect(() => {
+    console.log('🚀 [AuthContext] Initialisation du AuthProvider');
+    checkAuthStatus();
+  }, [checkAuthStatus]);
+
+  /**
+   * Écoute les changements de localStorage (pour synchroniser les onglets)
+   */
+  useEffect(() => {
+    const handleStorageChange = (event: StorageEvent) => {
+      if (event.key === 'user' || event.key === 'jwt_token') {
+        console.log('🔄 [AuthContext] Changement de localStorage détecté:', event.key);
+        checkAuthStatus();
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+    };
+  }, [checkAuthStatus]);
+
+  // ==============================
+  // COMPUTED VALUES
+  // ==============================
+
   const { isAuthenticated, isAdmin, isUser } = useMemo(() => {
     const isAuthenticated = !!user;
     const isAdmin = user?.roles?.includes('ROLE_ADMIN') || false;
     const isUser = user?.roles?.includes('ROLE_USER') || false;
 
-    console.log('📊 [AuthContext] État actuel:', {
-      user: user?.email || 'null',
-      isAuthenticated,
-      isAdmin,
-      isUser,
-      loading
-    });
+    if (initialized) {
+      console.log('📊 [AuthContext] État actuel:', {
+        user: user?.email || 'null',
+        isAuthenticated,
+        isAdmin,
+        isUser,
+        loading
+      });
+    }
 
     return { isAuthenticated, isAdmin, isUser };
-  }, [user, loading]);
+  }, [user, loading, initialized]);
 
-  // Valeur du context optimisée avec useMemo
+  // ==============================
+  // CONTEXT VALUE
+  // ==============================
+
   const contextValue = useMemo(() => ({
     user,
     isAuthenticated,
     isAdmin,
     isUser,
+    loading,
     login,
     register,
     logout,
-    loading,
-    checkAuthStatus
-  }), [user, isAuthenticated, isAdmin, isUser, loading]);
+    checkAuthStatus,
+    refreshUser // <-- AJOUTÉ ICI
+  }), [
+    user, 
+    isAuthenticated, 
+    isAdmin, 
+    isUser, 
+    loading, 
+    login, 
+    register, 
+    logout, 
+    checkAuthStatus,
+    refreshUser
+  ]);
+
+  // ==============================
+  // RENDER
+  // ==============================
 
   return (
     <AuthContext.Provider value={contextValue}>
@@ -145,14 +274,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   );
 };
 
-// Hook useAuth optimisé pour HMR
-export function useAuth() {
+// ==============================
+// CUSTOM HOOK
+// ==============================
+
+export function useAuth(): AuthContextType {
   const context = useContext(AuthContext);
+  
   if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
+    throw new Error('useAuth doit être utilisé à l\'intérieur d\'un AuthProvider');
   }
+  
   return context;
 }
 
-// Export par défaut pour la compatibilité
+// ==============================
+// DEFAULT EXPORT
+// ==============================
+
 export default AuthContext;

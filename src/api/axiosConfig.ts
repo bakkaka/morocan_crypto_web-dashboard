@@ -1,117 +1,176 @@
-// src/api/axiosConfig.ts - VERSION FINALE CORRIGÉE
+// src/api/axiosConfig.ts - VERSION SANS process.env
 import axios from 'axios';
 
-// ==============================
-// CONFIGURATION AXIOS
-// ==============================
+const API_URL = 'https://morocancryptobackend-production-f3b6.up.railway.app/api';
 
+// Déterminer si on est en développement
+const IS_DEV = 
+  typeof window !== 'undefined' && 
+  (window.location.hostname === 'localhost' || 
+   window.location.hostname === '127.0.0.1' ||
+   window.location.hostname.includes('local'));
+
+// Configuration de base d'axios
 const api = axios.create({
-  baseURL: 'https://morocancryptobackend-production-f3b6.up.railway.app/api',
+  baseURL: API_URL,
+  timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
+    'Accept': 'application/json',
   },
-  timeout: 30000,
 });
 
 // ==============================
-// INTERCEPTEUR REQUÊTE
+// INTERCEPTEUR DE REQUÊTES
 // ==============================
 
 api.interceptors.request.use(
   (config) => {
-    // Log de la requête
-    console.log(`📤 [API] ${config.method?.toUpperCase()} ${config.url}`);
-    
-    // N'ajoutez PAS le header Authorization pour login_check
-    if (config.url?.includes('login_check')) {
-      console.log('🔓 Pas de token pour login_check');
-      return config;
-    }
-    
-    // Récupérez le token depuis localStorage
-    const token = localStorage.getItem('authToken');
+    const token = localStorage.getItem('jwt_token');
     
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
-      console.log(`🔑 Token ajouté: ${token.substring(0, 30)}...`);
-    } else {
-      console.warn(`⚠️ Pas de token pour ${config.url}`);
       
-      // Si c'est une route protégée, prévenez
-      const protectedRoutes = ['/user_bank_details', '/me', '/ads', '/dashboard'];
-      const isProtected = protectedRoutes.some(route => config.url?.includes(route));
-      
-      if (isProtected) {
-        console.error('❌ Tentative d\'accès à une route protégée sans token!');
+      // Log en développement
+      if (IS_DEV) {
+        console.log(`🔑 Token ajouté pour: ${config.url}`);
       }
+    } else {
+      const protectedRoutes = ['/users/me', '/user_bank_details', '/ads', '/currencies'];
+      const isProtectedRoute = protectedRoutes.some(route => 
+        config.url?.includes(route) && config.method !== 'get'
+      );
+      
+      if (isProtectedRoute) {
+        console.warn(`⚠️ Pas de token pour ${config.method?.toUpperCase()} ${config.url}`);
+      }
+    }
+    
+    // Log détaillé en développement
+    if (IS_DEV) {
+      console.log(`➡️ ${config.method?.toUpperCase()} ${config.url}`, {
+        hasToken: !!token,
+        timeout: config.timeout
+      });
     }
     
     return config;
   },
   (error) => {
-    console.error('❌ Erreur intercepteur requête:', error);
+    console.error('❌ Erreur dans l\'intercepteur de requête:', error);
     return Promise.reject(error);
   }
 );
 
 // ==============================
-// INTERCEPTEUR RÉPONSE
+// INTERCEPTEUR DE RÉPONSES
 // ==============================
 
 api.interceptors.response.use(
   (response) => {
-    // Log des réponses réussies
-    if (response.config.url?.includes('/user_bank_details')) {
-      console.log(`✅ [API] ${response.status} ${response.config.url}: Données reçues`);
+    // Log des réponses réussies en développement
+    if (IS_DEV) {
+      console.log(`✅ ${response.status} ${response.config.url}`, {
+        data: response.data,
+        status: response.status
+      });
     }
+    
     return response;
   },
   (error) => {
-    // Log détaillé des erreurs
-    if (error.response) {
-      const { status, data } = error.response;
-      const url = error.config?.url;
+    const url = error.config?.url;
+    const method = error.config?.method?.toUpperCase();
+    const status = error.response?.status;
+    const data = error.response?.data;
+    
+    const isMeEndpoint = url && url.includes('/users/me');
+    
+    // GESTION SPÉCIALE POUR /users/me (erreur 500 connue)
+    if (isMeEndpoint && status === 500) {
+      console.warn('⚠️ [API] /users/me retourne 500 (problème connu côté Symfony)');
       
-      console.error(`❌ [API] Erreur ${status} ${url}:`, {
-        message: data?.message || data?.detail,
-        data: data
+      const storedUser = localStorage.getItem('user');
+      let userData = null;
+      
+      try {
+        userData = storedUser ? JSON.parse(storedUser) : null;
+      } catch (e) {
+        console.warn('⚠️ Impossible de parser l\'utilisateur stocké');
+      }
+      
+      return Promise.resolve({
+        data: {
+          user: userData,
+          message: 'Données utilisateur récupérées depuis le stockage local'
+        },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config: error.config
+      });
+    }
+    
+    // LOG DÉTAILLÉ DES AUTRES ERREURS
+    if (error.response) {
+      console.error(`❌ [API] Erreur ${status} ${method} ${url}:`, {
+        status: status,
+        data: data,
+        config: {
+          method: method,
+          url: url,
+          data: error.config?.data ? JSON.parse(error.config.data) : null
+        }
       });
       
-      // Gestion spécifique des erreurs
-      if (status === 401) {
-        console.error('🔐 Non authentifié - Token expiré ou invalide');
+      // 401 Unauthorized
+      if (status === 401 && !isMeEndpoint) {
+        console.warn('🚨 Session expirée ou token invalide');
         
-        // Nettoyage du localStorage
-        localStorage.removeItem('authToken');
-        localStorage.removeItem('user');
-        localStorage.removeItem('isAuthenticated');
-        
-        // Redirection vers login si nécessaire
-        if (typeof window !== 'undefined' && 
-            window.location.pathname !== '/login' && 
-            window.location.pathname !== '/register') {
-          console.log('🔄 Redirection vers /login');
-          setTimeout(() => {
+        setTimeout(() => {
+          localStorage.removeItem('jwt_token');
+          localStorage.removeItem('user');
+          console.log('🧹 Données d\'authentification nettoyées');
+          
+          if (!window.location.pathname.includes('/login')) {
             window.location.href = '/login';
-          }, 1500);
-        }
+          }
+        }, 1000);
       }
       
-      if (status === 403) {
-        console.error('🚫 Accès interdit - Vérifiez vos permissions');
+      // 403 Forbidden
+      else if (status === 403) {
+        console.warn('🚫 Accès refusé - Permissions insuffisantes');
       }
       
-      if (status === 422) {
-        console.error('📋 Erreur de validation:', data?.violations);
+      // 404 Not Found
+      else if (status === 404) {
+        console.warn('🔍 Ressource non trouvée');
       }
       
-      if (status >= 500) {
-        console.error('💥 Erreur serveur');
+      // 429 Too Many Requests
+      else if (status === 429) {
+        console.warn('⏰ Trop de requêtes - Attendez quelques secondes');
       }
+      
+      // 500 Internal Server Error (général)
+      else if (status === 500 && !isMeEndpoint) {
+        console.error('💥 Erreur serveur interne');
+      }
+      
     } else if (error.request) {
-      console.error('🌐 Pas de réponse du serveur - Vérifiez la connexion');
+      console.error('🌐 Pas de réponse du serveur. Vérifiez:', {
+        message: error.message,
+        url: url,
+        possibleCauses: [
+          'Connexion internet perdue',
+          'Serveur hors ligne',
+          'Problème CORS',
+          'Timeout de la requête'
+        ]
+      });
     } else {
-      console.error('⚡ Erreur de configuration:', error.message);
+      console.error('⚙️ Erreur de configuration axios:', error.message);
     }
     
     return Promise.reject(error);
@@ -119,54 +178,48 @@ api.interceptors.response.use(
 );
 
 // ==============================
-// FONCTIONS UTILITAIRES
+// FONCTIONS UTILITAIRES EXPORTÉES
 // ==============================
 
-/**
- * Vérifie si l'utilisateur est authentifié
- */
-export const checkAuthStatus = (): boolean => {
-  const token = localStorage.getItem('authToken');
-  const user = localStorage.getItem('user');
-  const isAuth = localStorage.getItem('isAuthenticated') === 'true';
-  
-  console.log('🔍 Vérification auth:', {
-    hasToken: !!token,
-    hasUser: !!user,
-    isAuthFlag: isAuth
-  });
-  
-  return !!(token && user && isAuth);
-};
-
-/**
- * Nettoie toutes les données d'authentification
- */
-export const clearAuthData = (): void => {
-  const keys = ['authToken', 'user', 'isAuthenticated', 'authTimestamp'];
-  
-  keys.forEach(key => {
-    localStorage.removeItem(key);
-  });
-  
-  console.log('🧹 Données d\'authentification nettoyées');
-};
-
-/**
- * Teste la connexion à l'API
- */
-export const testConnection = async (): Promise<{ connected: boolean; message: string }> => {
+export const testConnection = async (): Promise<boolean> => {
   try {
     const response = await api.get('/', { timeout: 5000 });
-    return { connected: true, message: `API accessible (${response.status})` };
+    return response.status === 200;
   } catch (error) {
-    return { connected: false, message: 'API non accessible' };
+    console.warn('⚠️ Test de connexion échoué:', error);
+    return false;
+  }
+};
+
+export const getApiStatus = async (): Promise<{
+  connected: boolean;
+  responseTime: number;
+  status: number;
+}> => {
+  const startTime = Date.now();
+  
+  try {
+    const response = await api.get('/', { timeout: 10000 });
+    const responseTime = Date.now() - startTime;
+    
+    return {
+      connected: true,
+      responseTime,
+      status: response.status
+    };
+  } catch (error: any) {
+    const responseTime = Date.now() - startTime;
+    
+    return {
+      connected: false,
+      responseTime,
+      status: error.response?.status || 0
+    };
   }
 };
 
 // ==============================
-// EXPORT
+// EXPORT PAR DÉFAUT
 // ==============================
 
 export default api;
-//export { checkAuthStatus, clearAuthData, testConnection };

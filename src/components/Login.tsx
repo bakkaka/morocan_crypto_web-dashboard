@@ -1,256 +1,159 @@
-// src/pages/Login.tsx
+// src/components/Login.tsx - VERSION CORRIGÉE
 import React, { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
 const Login: React.FC = () => {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [loginSuccess, setLoginSuccess] = useState(false);
+  
+  const { login, isAuthenticated, user } = useAuth();
   const navigate = useNavigate();
-  const { isAuthenticated, login, user } = useAuth();
 
-  // États du formulaire
-  const [formData, setFormData] = useState({
-    email: '',
-    password: ''
-  });
-
-  // États de l'interface
-  const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [apiStatus, setApiStatus] = useState<{ connected: boolean; message: string } | null>(null);
-
-  // Redirection si déjà connecté
+  // ==============================
+  // CORRECTION : useEffect pour redirection
+  // ==============================
+  
   useEffect(() => {
     console.log('🔍 useEffect - isAuthenticated:', isAuthenticated);
-    if (isAuthenticated) {
-      console.log('🔀 Redirection automatique vers /dashboard');
-      navigate('/dashboard');
-    }
-  }, [isAuthenticated, navigate]);
-
-  // Test de connexion API au chargement
-  useEffect(() => {
-    const checkAPI = async () => {
-      try {
-        // Pour le test API, on fait un simple fetch
-        const response = await fetch('https://morocancryptobackend-production-f3b6.up.railway.app/api');
-
-        setApiStatus({ 
-          connected: response.ok, 
-          message: response.ok ? 'Serveur OK' : 'Serveur erreur' 
-        });
-      } catch (error) {
-        setApiStatus({ connected: false, message: 'Serveur non accessible' });
-      }
-    };
+    console.log('🔍 useEffect - user:', user?.email);
     
-    checkAPI();
-  }, []);
-
-  // Gestion des changements de champs
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { id, value } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [id]: value
-    }));
-    
-    // Effacer le message d'erreur quand l'utilisateur tape
-    if (message) {
-      setMessage(null);
+    if (isAuthenticated && user) {
+      console.log('✅ Condition redirection remplie!');
+      console.log('👤 User:', user.email);
+      
+      // Petit délai pour laisser le temps à React de tout mettre à jour
+      const timer = setTimeout(() => {
+        console.log('🔀 Redirection automatique vers /dashboard');
+        navigate('/dashboard', { replace: true });
+      }, 100);
+      
+      return () => clearTimeout(timer);
     }
-  };
+  }, [isAuthenticated, user, navigate]);
 
-  // Vérification si le bouton doit être désactivé
-  const isSubmitDisabled = loading || (apiStatus !== null && !apiStatus.connected);
+  // ==============================
+  // GESTION DE LA CONNEXION
+  // ==============================
 
-  // Soumission du formulaire
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
+    setIsLoggingIn(true);
+    setLoginSuccess(false);
     
-    // Vérification de la connexion API
-    if (apiStatus && !apiStatus.connected) {
-      setMessage({
-        text: '❌ Impossible de se connecter au serveur. Vérifiez que le backend est démarré.',
-        type: 'error'
-      });
-      return;
-    }
-
-    setLoading(true);
-    setMessage(null);
-
+    console.log('🔄 Tentative de connexion...', { email, password: '***' });
+    
     try {
-      console.log('🔄 Tentative de connexion...', { 
-        email: formData.email, 
-        password: '***'
-      });
-
-      // DEBUG AVANT LOGIN
       console.log('1. Avant appel login()');
-
-      await login(formData.email, formData.password);
-
-      // DEBUG APRÈS LOGIN RÉUSSI
+      
+      // Appel de la connexion
+      await login(email, password);
+      
       console.log('2. Login réussi, vérification auth state');
-      console.log('3. isAuthenticated:', isAuthenticated);
-      console.log('4. user:', user);
-
-      setMessage({
-        text: '✅ Connexion réussie ! Redirection...',
-        type: 'success'
-      });
-
-      // Réinitialiser le formulaire
-      setFormData({
-        email: '',
-        password: '',
-      });
-
-      // DEBUG AVANT REDIRECTION
-      console.log('5. Avant redirection vers /dashboard');
-
-      // Redirection vers dashboard
-      setTimeout(() => {
-        console.log('6. Exécution de la redirection');
-        navigate('/dashboard');
-      }, 2000);
-
-    } catch (error: any) {
-      console.error('💥 Erreur de connexion détaillée:', error);
       
-      let errorMessage = 'Erreur lors de la connexion';
+      // NE PAS vérifier isAuthenticated ici !
+      // La redirection se fera via le useEffect
       
-      if (error.message) {
-        errorMessage = error.message;
+      // Marquer le succès pour afficher un message
+      setLoginSuccess(true);
+      
+    } catch (err: any) {
+      console.error('❌ Erreur de connexion:', err);
+      
+      let errorMessage = 'Échec de la connexion';
+      if (err.response?.status === 401) {
+        errorMessage = 'Email ou mot de passe incorrect';
+      } else if (err.message) {
+        errorMessage = err.message;
       }
-
-      setMessage({
-        text: `❌ ${errorMessage}`,
-        type: 'error'
-      });
+      
+      setError(errorMessage);
     } finally {
-      setLoading(false);
+      setIsLoggingIn(false);
+      console.log('🏁 HandleSubmit terminé');
     }
   };
 
-  // Styles pour les messages
-  const getAlertClass = (type: string) => {
-    switch (type) {
-      case 'success': return 'alert-success';
-      case 'error': return 'alert-danger';
-      case 'info': return 'alert-info';
-      default: return 'alert-info';
+  // ==============================
+  // VÉRIFICATION DIRECTE POUR DEBUG
+  // ==============================
+
+  useEffect(() => {
+    // Debug : vérifier localStorage après la connexion
+    if (loginSuccess) {
+      const timer = setTimeout(() => {
+        console.log('🔍 DEBUG - Vérification après login:');
+        console.log('   - localStorage token:', localStorage.getItem('jwt_token') ? 'PRÉSENT' : 'ABSENT');
+        console.log('   - localStorage user:', localStorage.getItem('user'));
+        console.log('   - AuthContext isAuthenticated:', isAuthenticated);
+        console.log('   - AuthContext user:', user?.email);
+      }, 300);
+      
+      return () => clearTimeout(timer);
     }
-  };
+  }, [loginSuccess, isAuthenticated, user]);
 
-  // Si déjà connecté, afficher un message
-  if (isAuthenticated) {
-    return (
-      <div className="container mt-5">
-        <div className="row justify-content-center">
-          <div className="col-md-6">
-            <div className="card shadow-lg">
-              <div className="card-header bg-success text-white">
-                <h2 className="card-title text-center mb-0">Déjà connecté</h2>
-              </div>
-              <div className="card-body p-4 text-center">
-                <p className="mb-4">Vous êtes déjà connecté à votre compte.</p>
-                <Link 
-                  to="/dashboard" 
-                  className="btn btn-primary w-100 py-2 fw-bold"
-                >
-                  Aller au Tableau de bord
-                </Link>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // ==============================
+  // RENDER
+  // ==============================
 
-  // Rendu normal
   return (
-    <div className="container mt-5">
+    <div className="container py-5">
       <div className="row justify-content-center">
-        <div className="col-md-6">
-          <div className="card shadow-lg">
-            <div className="card-header bg-primary text-white">
-              <h2 className="card-title text-center mb-0">Connexion</h2>
-            </div>
-            
+        <div className="col-md-6 col-lg-4">
+          <div className="card shadow">
             <div className="card-body p-4">
-              {/* Statut API */}
-              {apiStatus && (
-                <div className={`alert ${apiStatus.connected ? 'alert-success' : 'alert-warning'} mb-4`}>
-                  <small>
-                    <strong>Statut serveur:</strong> {apiStatus.message}
-                    {!apiStatus.connected && (
-                      <div>
-                        <small>Connexion au serveur distant Railway…</small>
-                      </div>
-                    )}
-                  </small>
+              <h2 className="text-center mb-4">Connexion</h2>
+              
+              {error && (
+                <div className="alert alert-danger">
+                  {error}
                 </div>
               )}
-
-              {/* Message de résultat */}
-              {message && (
-                <div className={`alert ${getAlertClass(message.type)} alert-dismissible fade show`}>
-                  <div className="d-flex align-items-center">
-                    <span className="me-2">{message.type === 'success' ? '✅' : '❌'}</span>
-                    <span>{message.text.replace('✅', '').replace('❌', '')}</span>
-                  </div>
-                  <button 
-                    type="button" 
-                    className="btn-close" 
-                    onClick={() => setMessage(null)}
-                    aria-label="Close"
-                  ></button>
+              
+              {loginSuccess && (
+                <div className="alert alert-success">
+                  ✅ Connexion réussie ! Redirection en cours...
                 </div>
               )}
-
-              <form onSubmit={handleSubmit} noValidate>
+              
+              <form onSubmit={handleSubmit}>
                 <div className="mb-3">
-                  <label htmlFor="email" className="form-label">
-                    Email <span className="text-danger">*</span>
-                  </label>
+                  <label className="form-label">Email</label>
                   <input
                     type="email"
-                    id="email"
                     className="form-control"
-                    value={formData.email}
-                    onChange={handleInputChange}
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
                     required
-                    disabled={loading}
-                    placeholder="exemple@email.com"
+                    disabled={isLoggingIn}
                   />
                 </div>
-
-                <div className="mb-4">
-                  <label htmlFor="password" className="form-label">
-                    Mot de passe <span className="text-danger">*</span>
-                  </label>
+                
+                <div className="mb-3">
+                  <label className="form-label">Mot de passe</label>
                   <input
                     type="password"
-                    id="password"
                     className="form-control"
-                    value={formData.password}
-                    onChange={handleInputChange}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
                     required
-                    disabled={loading}
-                    placeholder="Votre mot de passe"
+                    disabled={isLoggingIn}
                   />
                 </div>
-
+                
                 <button
                   type="submit"
-                  className="btn btn-primary w-100 py-2 fw-bold"
-                  disabled={isSubmitDisabled}
+                  className="btn btn-primary w-100"
+                  disabled={isLoggingIn}
                 >
-                  {loading ? (
+                  {isLoggingIn ? (
                     <>
-                      <span className="spinner-border spinner-border-sm me-2" role="status"></span>
+                      <span className="spinner-border spinner-border-sm me-2"></span>
                       Connexion...
                     </>
                   ) : (
@@ -258,27 +161,9 @@ const Login: React.FC = () => {
                   )}
                 </button>
               </form>
-
-              <div className="text-center mt-4">
-                <p className="mb-2">
-                  Pas encore de compte ? <Link to="/register" className="fw-bold text-primary">Créer un compte</Link>
-                </p>
-                <p className="mb-0">
-                  <Link to="/" className="text-muted text-decoration-none">
-                    ← Retour à l'accueil
-                  </Link>
-                </p>
-              </div>
-
-              {/* Section debug */}
-              <div className="mt-4 p-3 bg-light rounded">
-                <small className="text-muted">
-                  <strong>Debug Info:</strong><br />
-                  - API Status: {apiStatus?.connected ? 'Connected ✅' : 'Disconnected ❌'}<br />
-                  - Loading: {loading ? 'Yes' : 'No'}<br />
-                  - Auth State: {isAuthenticated ? 'Authenticated' : 'Not authenticated'}<br />
-                  - Form Valid: {formData.email && formData.password ? 'Yes' : 'No'}
-                </small>
+              
+              <div className="text-center mt-3">
+                <Link to="/register">Créer un compte</Link>
               </div>
             </div>
           </div>
