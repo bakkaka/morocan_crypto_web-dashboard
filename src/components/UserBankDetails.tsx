@@ -1,8 +1,9 @@
-// src/components/UserBankDetails.tsx - VERSION COMPLÈTE OPTIMISÉE
+// src/components/UserBankDetails.tsx - VERSION COMPLÈTE CORRIGÉE
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../api/axiosConfig';
+import { fetchUserRealId, ensureValidUserId } from '../api/UserService';
 
 // ==============================
 // TYPES
@@ -48,7 +49,7 @@ interface BankFormData {
 // ==============================
 
 const isValidUserId = (id: any): boolean => {
-  // Vérifie si l'ID est valide (accepte 0 comme ID valide)
+  // Accepte ID=0 temporairement
   return id !== undefined && id !== null && !isNaN(Number(id));
 };
 
@@ -82,6 +83,54 @@ const validateBankForm = (formData: BankFormData): string | null => {
 };
 
 // ==============================
+// AUTH UTILITIES
+// ==============================
+
+const getAuthToken = (): string | null => {
+  const tokenKeys = ['auth_token', 'jwt_token', 'token'];
+  
+  for (const key of tokenKeys) {
+    const token = localStorage.getItem(key);
+    if (token) {
+      return token;
+    }
+  }
+  
+  return null;
+};
+
+const getStoredUser = (): any | null => {
+  const userKeys = ['current_user', 'user'];
+  
+  for (const key of userKeys) {
+    const userStr = localStorage.getItem(key);
+    if (userStr) {
+      try {
+        const user = JSON.parse(userStr);
+        if (user && user.email && user.id !== undefined) {
+          return user;
+        }
+      } catch (e) {
+        console.error(`❌ Erreur parsing ${key}:`, e);
+      }
+    }
+  }
+  
+  return null;
+};
+
+const checkLocalStorage = (): void => {
+  console.log('🔍 Contenu localStorage (auth related):');
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key?.includes('token') || key?.includes('auth') || key?.includes('user')) {
+      const value = localStorage.getItem(key);
+      console.log(`  ${key}: ${value?.substring(0, 50)}...`);
+    }
+  }
+};
+
+// ==============================
 // CONSTANTS
 // ==============================
 
@@ -110,7 +159,7 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
   // HOOKS & STATE
   // ==============================
   const navigate = useNavigate();
-  const { user, isAuthenticated, refreshUser } = useAuth();
+  const { user, isAuthenticated, refreshUser, fixUserId } = useAuth();
   
   const [loading, setLoading] = useState<boolean>(false);
   const [dataLoading, setDataLoading] = useState<boolean>(true);
@@ -118,6 +167,7 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
   const [success, setSuccess] = useState<string | null>(null);
   const [bankDetails, setBankDetails] = useState<UserBankDetail[]>([]);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [userId, setUserId] = useState<number | null>(null);
   
   const initialFormData: BankFormData = {
     bankName: 'CIH',
@@ -133,15 +183,25 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
   const [editFormData, setEditFormData] = useState<BankFormData>(initialFormData);
 
   // ==============================
-  // DEBUG & LOGS
+  // INITIALIZATION
   // ==============================
   
   useEffect(() => {
+    // Définir l'ID utilisateur
+    if (user && user.id !== 0) {
+      setUserId(user.id);
+    } else {
+      const storedUser = getStoredUser();
+      if (storedUser && storedUser.id !== 0) {
+        setUserId(storedUser.id);
+      }
+    }
+    
     console.log('🔍 UserBankDetails - État auth:', {
-      user: user ? { id: user.id, email: user.email } : null,
+      authUser: user ? { id: user.id, email: user.email } : null,
       isAuthenticated,
-      localStorageUser: localStorage.getItem('user'),
-      localStorageToken: localStorage.getItem('jwt_token') ? 'PRÉSENT' : 'ABSENT'
+      userId,
+      isValidId: userId ? isValidUserId(userId) : false
     });
   }, [user, isAuthenticated]);
 
@@ -163,16 +223,17 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
       
       console.log('📥 Chargement des coordonnées bancaires...');
       
-      // Vérification ESSENTIELLE: le bon token
-      const token = localStorage.getItem('jwt_token');
+      // Vérification du token
+      const token = getAuthToken();
+      
       if (!token) {
-        console.error('❌ Aucun token trouvé dans localStorage');
+        console.error('❌ Aucun token trouvé');
         setError('Session expirée. Veuillez vous reconnecter.');
         setTimeout(() => navigate('/login'), 2000);
         return;
       }
       
-      console.log('✅ Token présent:', token.substring(0, 20) + '...');
+      console.log('✅ Token présent');
       
       // Rafraîchir l'utilisateur si nécessaire
       if (forceRefresh && user) {
@@ -191,7 +252,7 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
       const response = await api.get(endpoint);
       const data = extractHydraMember(response.data);
       
-      console.log('✅ Données bancaires chargées:', data.length, 'enregistrements');
+      console.log('✅ Données bancaires chargées:', data.length, 'enregistrement(s)');
       setBankDetails(data);
       
     } catch (err: any) {
@@ -200,16 +261,9 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
       if (err.response?.status === 401) {
         console.error('🔐 Erreur 401 - Token invalide ou expiré');
         setError('Session expirée. Redirection vers la page de connexion...');
-        
-        // Nettoyer le localStorage
-        localStorage.removeItem('jwt_token');
-        localStorage.removeItem('user');
-        
-        setTimeout(() => navigate('/login'), 2000);
+        setTimeout(() => navigate('/login'), 1500);
       } else if (err.response?.status === 403) {
         setError('Accès interdit. Vous n\'avez pas les permissions nécessaires.');
-      } else if (err.code === 'ERR_NETWORK') {
-        setError('Erreur réseau. Vérifiez votre connexion internet.');
       } else {
         setError(`Impossible de charger les coordonnées bancaires: ${err.message || 'Erreur inconnue'}`);
       }
@@ -219,68 +273,47 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
   }, [adminView, extractHydraMember, navigate, refreshUser, user]);
 
   // ==============================
-  // AUTHENTICATION CHECK - OPTIMISÉ
+  // AUTHENTICATION CHECK
   // ==============================
 
   useEffect(() => {
     const checkAuthAndLoad = async () => {
       console.log('🔐 UserBankDetails - Vérification authentification...');
       
-      // Vérification multi-niveaux
-      const token = localStorage.getItem('jwt_token');
-      const userStr = localStorage.getItem('user');
+      const token = getAuthToken();
       
-      console.log('📊 État de vérification:', {
-        tokenPresent: !!token,
-        userStrPresent: !!userStr,
-        isAuthenticated,
-        user: user?.email,
-        userId: user?.id,
-        isValidId: isValidUserId(user?.id)
-      });
-      
-      // Si AuthContext dit authentifié ET on a un user valide → OK
-      if (isAuthenticated && user && isValidUserId(user.id)) {
-        console.log('✅ Authentifié via AuthContext, user:', user.email, 'ID:', user.id);
-        await loadBankDetails();
-        return;
-      }
-      
-      // Si AuthContext dit non authentifié MAIS on a un token dans localStorage
-      if (!isAuthenticated && token && userStr) {
-        console.log('⚠️ Incohérence: token présent mais AuthContext pas synchronisé');
-        console.log('🔄 Tentative de rafraîchissement de l\'authentification...');
-        
-        try {
-          // Essayer de rafraîchir l'utilisateur
-          await refreshUser();
-          
-          // Vérifier à nouveau après rafraîchissement
-          if (isAuthenticated && user && isValidUserId(user.id)) {
-            console.log('✅ Synchronisation réussie après refreshUser');
-            await loadBankDetails();
-            return;
-          }
-        } catch (refreshError) {
-          console.error('❌ Échec rafraîchissement:', refreshError);
-        }
-      }
-      
-      // Si vraiment non authentifié
-      if (!token || !userStr) {
-        console.log('🔒 Non authentifié - Pas de token ou user dans localStorage');
-        console.log('📍 Redirection vers /login');
+      if (!token) {
+        console.log('🔒 Pas de token, redirection...');
         navigate('/login');
         return;
       }
       
-      // Dernier recours: essayer de charger quand même
-      console.log('⚠️ État indéterminé, tentative de chargement...');
-      await loadBankDetails();
+      // Si ID=0, essayer de le corriger
+      if (user && user.id === 0) {
+        console.warn('⚠️ ID utilisateur = 0, tentative de correction...');
+        const fixed = await ensureValidUserId();
+        if (fixed) {
+          console.log('✅ ID corrigé, rechargement...');
+          window.location.reload();
+          return;
+        }
+      }
+      
+      if (isAuthenticated) {
+        console.log('✅ Authentifié, chargement des données...');
+        await loadBankDetails();
+      } else {
+        console.log('❌ Non authentifié');
+        navigate('/login');
+      }
     };
     
-    checkAuthAndLoad();
-  }, [isAuthenticated, user, navigate, loadBankDetails, refreshUser]);
+    const timer = setTimeout(() => {
+      checkAuthAndLoad();
+    }, 100);
+    
+    return () => clearTimeout(timer);
+  }, [isAuthenticated, user, navigate, loadBankDetails]);
 
   // ==============================
   // FORM HANDLERS
@@ -295,7 +328,6 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
         [name]: type === 'checkbox' ? (e.target as HTMLInputElement).checked : value
       }));
       
-      // Clear messages on user input
       if (error) setError(null);
       if (success) setSuccess(null);
     };
@@ -307,52 +339,43 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
   // CRUD OPERATIONS
   // ==============================
 
-  const getEffectiveUser = useCallback((): { id: number; email: string } | null => {
+  const getEffectiveUser = useCallback(async (): Promise<{ id: number; email: string } | null> => {
     console.log('👤 Recherche utilisateur effectif...');
     
-    // Logs détaillés pour debug
-    console.log('📊 État user AuthContext:', {
-      userExists: !!user,
-      userId: user?.id,
-      userEmail: user?.email,
-      isValidId: isValidUserId(user?.id)
-    });
+    // 1. Vérifier l'ID dans l'état local
+    if (userId && isValidUserId(userId)) {
+      const email = user?.email || getStoredUser()?.email || 'unknown@email.com';
+      console.log('✅ Utilisateur trouvé via userId:', { id: userId, email });
+      return { id: userId, email };
+    }
     
-    // Priorité 1: Utilisateur du contexte Auth (ACCEPTE id: 0)
+    // 2. Vérifier l'utilisateur AuthContext
     if (user && isValidUserId(user.id)) {
       console.log('✅ Utilisateur trouvé dans AuthContext:', user.email, 'ID:', user.id);
       return { id: user.id, email: user.email || '' };
     }
     
-    // Priorité 2: Utilisateur du localStorage (ACCEPTE id: 0)
-    const storedUser = localStorage.getItem('user');
-    if (storedUser) {
-      try {
-        const parsedUser = JSON.parse(storedUser);
-        console.log('📊 État user localStorage:', {
-          parsed: !!parsedUser,
-          id: parsedUser?.id,
-          isValidId: isValidUserId(parsedUser?.id)
-        });
-        
-        if (parsedUser && isValidUserId(parsedUser.id)) {
-          console.log('✅ Utilisateur trouvé dans localStorage:', parsedUser.email, 'ID:', parsedUser.id);
-          return { id: parsedUser.id, email: parsedUser.email || '' };
-        }
-      } catch (e) {
-        console.error('❌ Erreur parsing stored user:', e);
+    // 3. Vérifier le localStorage
+    const storedUser = getStoredUser();
+    if (storedUser && isValidUserId(storedUser.id)) {
+      console.log('✅ Utilisateur trouvé dans localStorage:', storedUser.email, 'ID:', storedUser.id);
+      return { id: storedUser.id, email: storedUser.email || '' };
+    }
+    
+    // 4. Si ID = 0, essayer de récupérer le vrai ID
+    if ((user && user.id === 0) || (storedUser && storedUser.id === 0)) {
+      console.warn('⚠️ ID utilisateur = 0, tentative de récupération...');
+      const realId = await fetchUserRealId();
+      if (realId) {
+        const email = user?.email || storedUser?.email || 'unknown@email.com';
+        console.log('✅ ID corrigé:', realId);
+        return { id: realId, email };
       }
     }
     
     console.warn('⚠️ Aucun utilisateur effectif trouvé');
-    console.log('📊 Détails:', { 
-      user, 
-      storedUser,
-      authUserId: user?.id,
-      authUserValid: isValidUserId(user?.id)
-    });
     return null;
-  }, [user]);
+  }, [user, userId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -368,21 +391,26 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
       if (validationError) throw new Error(validationError);
 
       // Vérification utilisateur
-      const effectiveUser = getEffectiveUser();
-      console.log('👤 Utilisateur effectif trouvé:', effectiveUser);
+      const effectiveUser = await getEffectiveUser();
       
       if (!effectiveUser) {
         console.error('❌ Aucun utilisateur effectif');
-        console.log('🔍 Détails AuthContext:', { user, isAuthenticated });
-        console.log('🔍 Détails localStorage:', {
-          token: localStorage.getItem('jwt_token') ? 'PRÉSENT' : 'ABSENT',
-          user: localStorage.getItem('user')
-        });
         throw new Error('Session invalide. Veuillez vous reconnecter.');
       }
 
+      // VÉRIFICATION CRITIQUE : ID ne doit pas être 0
+      if (effectiveUser.id === 0) {
+        console.error('❌ ID utilisateur = 0, tentative de correction...');
+        const realId = await fetchUserRealId();
+        if (!realId) {
+          throw new Error('ID utilisateur invalide. Veuillez vous déconnecter et vous reconnecter.');
+        }
+        effectiveUser.id = realId;
+        console.log('✅ ID corrigé:', effectiveUser.id);
+      }
+
       // Vérifier le token
-      const token = localStorage.getItem('jwt_token');
+      const token = getAuthToken();
       if (!token) {
         throw new Error('Token manquant. Veuillez vous reconnecter.');
       }
@@ -405,35 +433,23 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
         userEmail: effectiveUser.email
       });
 
-      // Envoi avec gestion d'erreur améliorée
+      // Envoi
       const response = await api.post('/user_bank_details', postData);
       console.log('✅ Coordonnées créées:', response.data);
 
       setSuccess('✅ Coordonnées bancaires ajoutées avec succès !');
-      
-      // Reset form
       setFormData(initialFormData);
-
-      // Recharger la liste
       await loadBankDetails(true);
 
     } catch (err: any) {
       console.error('❌ Erreur création coordonnées:', err);
       
-      // Gestion d'erreur détaillée
-      if (err.response?.status === 401) {
+      // Gestion spécifique de l'erreur ID=0
+      if (err.response?.status === 404 && err.response?.data?.detail?.includes('/api/users/0')) {
+        setError('Erreur : ID utilisateur invalide. Veuillez vous déconnecter et vous reconnecter.');
+      } else if (err.response?.status === 401) {
         setError('Session expirée. Veuillez vous reconnecter.');
         setTimeout(() => navigate('/login'), 2000);
-      } else if (err.response?.status === 403) {
-        setError('Permission refusée. Vous ne pouvez pas ajouter ces coordonnées.');
-      } else if (err.response?.data?.violations) {
-        const violations = err.response.data.violations;
-        const errorMsg = violations.map((v: any) => `${v.propertyPath}: ${v.message}`).join(', ');
-        setError(`Erreur validation: ${errorMsg}`);
-      } else if (err.response?.data?.detail) {
-        setError(err.response.data.detail);
-      } else if (err.response?.data?.title) {
-        setError(err.response.data.title);
       } else if (err.message) {
         setError(err.message);
       } else {
@@ -495,12 +511,6 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
       if (err.response?.status === 401) {
         setError('Session expirée. Veuillez vous reconnecter.');
         setTimeout(() => navigate('/login'), 2000);
-      } else if (err.response?.data?.violations) {
-        const violations = err.response.data.violations;
-        const errorMsg = violations.map((v: any) => `${v.propertyPath}: ${v.message}`).join(', ');
-        setError(`Erreur validation: ${errorMsg}`);
-      } else if (err.response?.data?.detail) {
-        setError(err.response.data.detail);
       } else {
         setError('Erreur lors de la mise à jour');
       }
@@ -576,16 +586,36 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
   };
 
   const canSubmit = useMemo(() => {
-    const can = isAuthenticated && user && isValidUserId(user.id) && !loading;
-    console.log('🔍 canSubmit calculé:', { 
-      can, 
-      isAuthenticated, 
-      user: !!user, 
-      validId: user ? isValidUserId(user.id) : false,
-      loading 
-    });
+    const token = getAuthToken();
+    const can = isAuthenticated && userId && isValidUserId(userId) && token && !loading;
+    
     return can;
-  }, [isAuthenticated, user, loading]);
+  }, [isAuthenticated, userId, loading]);
+
+  // ==============================
+  // DEBUG BUTTON
+  // ==============================
+
+  const debugAuth = () => {
+    console.group('🔧 DEBUG AUTH UserBankDetails');
+    
+    console.log('=== AUTH CONTEXT ===');
+    console.log('User:', user);
+    console.log('isAuthenticated:', isAuthenticated);
+    
+    console.log('=== LOCALSTORAGE ===');
+    checkLocalStorage();
+    
+    console.log('=== TOKENS ===');
+    const token = getAuthToken();
+    console.log('Token trouvé:', token ? `${token.substring(0, 30)}...` : 'NON');
+    
+    console.log('=== USER ID ===');
+    console.log('User ID:', userId);
+    console.log('isValidUserId:', isValidUserId(userId));
+    
+    console.groupEnd();
+  };
 
   // ==============================
   // RENDER
@@ -599,15 +629,42 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
           <i className="bi bi-bank me-2"></i>
           {adminView ? 'Gestion des Coordonnées Bancaires' : 'Mes Coordonnées Bancaires'}
         </h2>
-        <button
-          type="button"
-          className="btn btn-outline-secondary"
-          onClick={() => navigate('/dashboard')}
-          disabled={loading}
-        >
-          <i className="bi bi-arrow-left me-2"></i>
-          Retour
-        </button>
+        <div className="d-flex gap-2">
+          <button
+            type="button"
+            className="btn btn-outline-warning btn-sm"
+            onClick={async () => {
+              console.log('🔧 Correction manuelle ID...');
+              const fixed = await fixUserId();
+              if (fixed) {
+                alert('✅ ID corrigé ! Rafraîchissement...');
+                window.location.reload();
+              } else {
+                alert('❌ Impossible de corriger ID');
+              }
+            }}
+            title="Corriger ID"
+          >
+            <i className="bi bi-wrench"></i>
+          </button>
+          <button
+            type="button"
+            className="btn btn-outline-secondary btn-sm"
+            onClick={debugAuth}
+            title="Debug Auth"
+          >
+            <i className="bi bi-bug"></i>
+          </button>
+          <button
+            type="button"
+            className="btn btn-outline-secondary"
+            onClick={() => navigate('/dashboard')}
+            disabled={loading}
+          >
+            <i className="bi bi-arrow-left me-2"></i>
+            Retour
+          </button>
+        </div>
       </div>
 
       {/* Status Messages */}
@@ -627,6 +684,23 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
         </div>
       )}
 
+      {/* ID Warning */}
+      {userId === 0 && (
+        <div className="alert alert-warning mb-4">
+          <i className="bi bi-exclamation-triangle me-2"></i>
+          <strong>Attention :</strong> Votre ID utilisateur est invalide (0). 
+          <button 
+            className="btn btn-sm btn-warning ms-2"
+            onClick={async () => {
+              const fixed = await fixUserId();
+              if (fixed) window.location.reload();
+            }}
+          >
+            Corriger l'ID
+          </button>
+        </div>
+      )}
+
       <div className="row">
         {/* Add New Bank Details Form */}
         <div className="col-lg-5 mb-4">
@@ -641,14 +715,24 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
               {!canSubmit ? (
                 <div className="alert alert-warning">
                   <i className="bi bi-exclamation-triangle me-2"></i>
-                  <strong>Attention :</strong> {!isAuthenticated ? 'Vous devez être connecté' : !user ? 'Session invalide' : !isValidUserId(user.id) ? 'ID utilisateur invalide' : 'Veuillez patienter...'}
-                  {!isAuthenticated && (
+                  <strong>Attention :</strong> 
+                  {!isAuthenticated ? 'Vous devez être connecté' : 
+                   !userId ? 'ID utilisateur manquant' : 
+                   userId === 0 ? 'ID utilisateur invalide (0)' :
+                   !getAuthToken() ? 'Token manquant' : 
+                   'Veuillez patienter...'}
+                  
+                  {userId === 0 && (
                     <div className="mt-2">
                       <button 
-                        className="btn btn-sm btn-outline-primary"
-                        onClick={() => navigate('/login')}
+                        className="btn btn-sm btn-warning"
+                        onClick={async () => {
+                          const fixed = await fixUserId();
+                          if (fixed) window.location.reload();
+                        }}
                       >
-                        Se connecter
+                        <i className="bi bi-wrench me-1"></i>
+                        Corriger l'ID
                       </button>
                     </div>
                   )}

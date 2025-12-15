@@ -28,6 +28,6 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
 
-    "types": ["node"]   // ⭐ AJOUT IMPORTANT
+    "types": ["node", "react", "react-dom"]
   }
 }

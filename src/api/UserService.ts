@@ -1,4 +1,4 @@
-// src/api/UserService.ts - VERSION COMPLÈTE OPTIMISÉE AVEC refreshCurrentUser
+// src/api/UserService.ts - VERSION COMPLÈTE CORRIGÉE
 import api from './axiosConfig';
 import type { User } from '../types/User';
 
@@ -30,12 +30,6 @@ export interface UpdateUserData {
   avatarUrl?: string;
 }
 
-export interface RefreshUserResponse {
-  success: boolean;
-  user: User | null;
-  error?: string;
-}
-
 export class UserServiceError extends Error {
   public code?: string;
   public status?: number;
@@ -55,11 +49,10 @@ export class UserServiceError extends Error {
 // ==============================
 
 const STORAGE_KEYS = {
-  USER: 'user',
-  TOKEN: 'jwt_token',
+  USER: 'current_user',
+  TOKEN: 'auth_token',
   REFRESH_TOKEN: 'refresh_token',
-  EXPIRES_AT: 'expires_at',
-  AUTH_TYPE: 'auth_type'
+  EXPIRES_AT: 'token_expiry',
 } as const;
 
 const AUTH_CONFIG = {
@@ -67,8 +60,7 @@ const AUTH_CONFIG = {
   LOGIN_ENDPOINT: '/login_check',
   ME_ENDPOINT: '/users/me',
   LOGOUT_ENDPOINT: '/auth/logout',
-  TOKEN_TTL: 3600,
-  REFRESH_TIMEOUT: 10000 // 10 secondes
+  TOKEN_TTL: 3600
 } as const;
 
 // ==============================
@@ -110,19 +102,38 @@ const saveAuthData = (token: string, user: User): void => {
   
   const expiresAt = payload?.exp ? payload.exp * 1000 : Date.now() + (AUTH_CONFIG.TOKEN_TTL * 1000);
   
+  // SAUVEGARDE DOUBLE POUR COMPATIBILITÉ
   localStorage.setItem(STORAGE_KEYS.TOKEN, token);
   localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+  localStorage.setItem('jwt_token', token);
+  localStorage.setItem('user', JSON.stringify(user));
   localStorage.setItem(STORAGE_KEYS.EXPIRES_AT, expiresAt.toString());
-  localStorage.setItem(STORAGE_KEYS.AUTH_TYPE, 'jwt');
   
+  // Configuration de l'API
   api.defaults.headers.common['Authorization'] = `${AUTH_CONFIG.TOKEN_PREFIX} ${token}`;
+  
+  console.log('💾 [UserService] Authentification sauvegardée:', {
+    email: user.email,
+    id: user.id,
+    tokenLength: token.length,
+    expires: new Date(expiresAt).toLocaleTimeString()
+  });
 };
 
-const clearAuthData = (): void => {
-  Object.values(STORAGE_KEYS).forEach(key => {
-    localStorage.removeItem(key);
-  });
+export const clearAuthData = (): void => {
+  console.log('🧹 [UserService] Nettoyage des données...');
+  
+  // Supprimer toutes les clés possibles
+  const allKeys = [
+    STORAGE_KEYS.USER, STORAGE_KEYS.TOKEN, STORAGE_KEYS.EXPIRES_AT,
+    'user', 'jwt_token', 'token', 'auth_token', 'current_user'
+  ];
+  
+  allKeys.forEach(key => localStorage.removeItem(key));
+  
   delete api.defaults.headers.common['Authorization'];
+  
+  console.log('✅ [UserService] Nettoyage terminé');
 };
 
 // ==============================
@@ -131,25 +142,33 @@ const clearAuthData = (): void => {
 
 export const loginUser = async (email: string, password: string): Promise<LoginResponse> => {
   try {
-    console.log('🔐 [UserService] Connexion utilisateur:', email);
+    console.log('🔐 [UserService] Connexion:', email);
     
     const requestData = {
       email: email.trim(),
       password: password
     };
     
-    const response = await api.post(AUTH_CONFIG.LOGIN_ENDPOINT, requestData);
+    console.log('📤 Envoi données login...');
     
+    const response = await api.post(AUTH_CONFIG.LOGIN_ENDPOINT, requestData);
     const { token } = response.data;
     
     if (!token) {
-      throw new UserServiceError('Token non reçu du serveur', 'NO_TOKEN', 400);
+      throw new UserServiceError('Token non reçu', 'NO_TOKEN', 400);
     }
     
-    const payload = decodeJWT(token);
+    console.log('✅ Token reçu:', token.substring(0, 20) + '...');
     
-    const user: User = {
-      id: payload?.id || 0,
+    const payload = decodeJWT(token);
+    console.log('📄 Payload JWT:', payload);
+    
+    // CRITIQUE: Vérifier que l'ID n'est pas 0 dans le JWT
+    let userId = payload?.id || payload?.user_id || 0;
+    
+    // Créer l'utilisateur avec l'ID disponible (même si 0)
+    const userFromToken: User = {
+      id: userId,
       email: payload?.email || payload?.username || email,
       fullName: payload?.fullName || email.split('@')[0] || 'Utilisateur',
       roles: payload?.roles || ['ROLE_USER'],
@@ -160,205 +179,343 @@ export const loginUser = async (email: string, password: string): Promise<LoginR
       phone: payload?.phone || '',
       walletAddress: payload?.walletAddress || '',
       isActive: payload?.isActive !== false,
-      //avatarUrl: payload?.avatarUrl || ''
     };
     
-    saveAuthData(token, user);
+    console.log('👤 User créé depuis JWT:', { id: userFromToken.id, email: userFromToken.email });
     
+    // Sauvegarder d'abord avec l'ID disponible (même 0)
+    saveAuthData(token, userFromToken);
+    
+    // FORCER l'appel à /users/me pour obtenir les données complètes
     try {
       const meResponse = await api.get(AUTH_CONFIG.ME_ENDPOINT);
-      if (meResponse.data?.user) {
-        Object.assign(user, meResponse.data.user);
-        localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+      console.log('📊 Réponse /users/me:', meResponse.data);
+      
+      if (meResponse.data) {
+        const apiUser = meResponse.data.user || meResponse.data;
+        
+        // Fusionner toutes les données
+        const enrichedUser = { ...userFromToken, ...apiUser };
+        
+        // Si on a un vrai ID, l'utiliser
+        if (apiUser.id && apiUser.id !== 0) {
+          enrichedUser.id = apiUser.id;
+          console.log('✅ ID définitif après /users/me:', enrichedUser.id);
+        }
+        
+        // Resauvegarder avec les données complètes
+        localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(enrichedUser));
+        localStorage.setItem('user', JSON.stringify(enrichedUser));
+        
+        console.log('✅ Données API fusionnées, ID final:', enrichedUser.id);
+        return { token, user: enrichedUser };
       }
     } catch (meError: any) {
-      // Ignorer les erreurs
+      console.warn('⚠️ /users/me échoué après login:', meError.message);
+      console.log('📦 Utilisation données JWT uniquement, ID:', userFromToken.id);
     }
     
-    return { token, user };
+    return { token, user: userFromToken };
     
   } catch (error: any) {
+    console.error('❌ Erreur connexion:', error);
     clearAuthData();
     
-    if (error.response) {
-      const { status, data } = error.response;
-      
-      switch (status) {
-        case 400:
-          throw new UserServiceError(
-            'Format incorrect. Utilisez: {"email": "...", "password": "..."}',
-            'BAD_FORMAT',
-            400
-          );
-        case 401:
-          throw new UserServiceError(
-            'Email ou mot de passe incorrect',
-            'INVALID_CREDENTIALS',
-            401
-          );
-        case 500:
-          throw new UserServiceError(
-            'Erreur interne du serveur',
-            'SERVER_ERROR',
-            500
-          );
-        default:
-          throw new UserServiceError(
-            data?.message || `Erreur serveur (${status})`,
-            'API_ERROR',
-            status
-          );
-      }
+    if (error.response?.status === 401) {
+      throw new UserServiceError('Email ou mot de passe incorrect', 'INVALID_CREDENTIALS', 401);
     }
     
-    if (error.code === 'ERR_NETWORK') {
-      throw new UserServiceError(
-        'Impossible de se connecter au serveur',
-        'NETWORK_ERROR'
-      );
-    }
-    
-    throw new UserServiceError(
-      error.message || 'Erreur inconnue',
-      'UNKNOWN_ERROR'
-    );
+    throw error;
   }
 };
 
-export const logoutUser = (redirectToLogin: boolean = true): void => {
+export const logoutUser = (): void => {
+  console.log('🚪 [UserService] Déconnexion...');
+  
   try {
     api.post(AUTH_CONFIG.LOGOUT_ENDPOINT, {}).catch(() => {});
-    
-    clearAuthData();
-    
-    if (redirectToLogin && typeof window !== 'undefined') {
-      setTimeout(() => {
-        window.location.href = '/login';
-      }, 100);
-    }
-    
-  } catch (error) {
-    console.error('⚠️ Erreur lors de la déconnexion:', error);
+  } catch (error) {}
+  
+  clearAuthData();
+  
+  console.log('✅ [UserService] Déconnexion réussie');
+  
+  if (typeof window !== 'undefined') {
+    window.location.href = '/login';
   }
 };
 
 // ==============================
-// GETTERS & CHECKERS
+// GETTERS & CHECKERS - MODIFIÉS POUR ACCEPTER ID=0
 // ==============================
 
 export const getCurrentUser = (): User | null => {
   try {
-    const userStr = localStorage.getItem(STORAGE_KEYS.USER);
-    if (!userStr) return null;
+    console.log('🔍 [UserService] Recherche utilisateur...');
     
-    const user = JSON.parse(userStr);
-    return user && typeof user === 'object' && user.email ? user : null;
+    // Chercher dans TOUTES les clés possibles
+    const possibleKeys = ['current_user', 'user', 'USER'];
+    
+    for (const key of possibleKeys) {
+      const userStr = localStorage.getItem(key);
+      if (userStr) {
+        console.log(`✅ Trouvé dans clé: "${key}"`);
+        try {
+          const user = JSON.parse(userStr);
+          
+          // MODIFICATION : ACCEPTER ID=0 TEMPORAIREMENT
+          if (user && typeof user === 'object' && (user.email || user.username)) {
+            console.log('👤 Utilisateur trouvé (ID peut être 0):', { 
+              email: user.email || user.username, 
+              id: user.id 
+            });
+            return user;
+          }
+        } catch (parseError) {
+          console.error(`❌ Erreur parsing "${key}":`, parseError);
+        }
+      }
+    }
+    
+    console.log('❌ Aucun utilisateur trouvé dans localStorage');
+    return null;
+    
   } catch (error) {
-    console.warn('⚠️ Erreur parsing utilisateur:', error);
+    console.error('❌ Erreur getCurrentUser:', error);
     return null;
   }
 };
 
 export const getAuthToken = (): string | null => {
-  return localStorage.getItem(STORAGE_KEYS.TOKEN);
+  // Chercher dans toutes les clés possibles
+  const tokenKeys = ['auth_token', 'jwt_token', 'token'];
+  
+  for (const key of tokenKeys) {
+    const token = localStorage.getItem(key);
+    if (token) {
+      return token;
+    }
+  }
+  
+  return null;
 };
 
 export const isAuthenticated = (): boolean => {
   const token = getAuthToken();
+  const user = getCurrentUser();
   
-  if (!token) return false;
+  if (!token) {
+    console.log('🔐 Aucun token trouvé');
+    return false;
+  }
   
   if (isTokenExpired(token)) {
+    console.log('⚠️ Token expiré');
     clearAuthData();
     return false;
   }
   
-  const user = getCurrentUser();
-  if (!user) return false;
-  
-  const storedExpiresAt = localStorage.getItem(STORAGE_KEYS.EXPIRES_AT);
-  if (storedExpiresAt) {
-    const expiresAt = parseInt(storedExpiresAt, 10);
-    if (Date.now() > expiresAt) {
-      clearAuthData();
-      return false;
-    }
+  if (!user) {
+    console.log('👤 Aucun utilisateur trouvé');
+    return false;
   }
+  
+  // MODIFICATION : ACCEPTER ID=0 TEMPORAIREMENT
+  console.log('✅ Authentifié (même avec ID=0):', { 
+    email: user.email, 
+    id: user.id,
+    warning: user.id === 0 ? 'ID=0 - À corriger plus tard' : 'ID valide'
+  });
   
   return true;
 };
 
 // ==============================
-// NOUVELLE FONCTION : refreshCurrentUser
+// FONCTIONS POUR GÉRER ID=0 - NOUVELLES
 // ==============================
 
 /**
- * Rafraîchit les données utilisateur depuis l'API
- * Compatible avec AuthContext et UserBankDetails
+ * Récupère le vrai ID utilisateur depuis l'API
  */
-export const refreshCurrentUser = async (): Promise<User | null> => {
+export const fetchUserRealId = async (): Promise<number | null> => {
   try {
-    console.log('🔄 [UserService] Rafraîchissement utilisateur depuis API...');
+    console.log('🔍 [UserService] Tentative de récupération du vrai ID utilisateur...');
     
     const token = getAuthToken();
     if (!token) {
-      console.log('❌ [UserService] Aucun token disponible pour rafraîchissement');
+      console.log('❌ Pas de token disponible');
       return null;
     }
     
-    // Vérifier si le token est encore valide
+    // 1. Essayer /users/me d'abord
+    try {
+      console.log('🔄 Essai endpoint: /users/me');
+      const response = await api.get('/users/me');
+      
+      if (response.data?.id && response.data.id !== 0) {
+        console.log(`✅ Vrai ID trouvé via /users/me:`, response.data.id);
+        return response.data.id;
+      }
+      
+      if (response.data?.user?.id && response.data.user.id !== 0) {
+        console.log(`✅ Vrai ID trouvé via /users/me.user:`, response.data.user.id);
+        return response.data.user.id;
+      }
+      
+    } catch (meError: any) {
+      console.log(`❌ /users/me échoué:`, meError.message);
+    }
+    
+    // 2. Chercher l'utilisateur par email
+    const currentUser = getCurrentUser();
+    if (currentUser?.email) {
+      console.log('🔄 Tentative recherche par email:', currentUser.email);
+      try {
+        const response = await api.get(`/users?email=${encodeURIComponent(currentUser.email)}`);
+        
+        if (response.data?.['hydra:member']?.[0]?.id) {
+          const realId = response.data['hydra:member'][0].id;
+          console.log(`✅ ID trouvé via recherche email:`, realId);
+          return realId;
+        }
+        
+        if (Array.isArray(response.data) && response.data[0]?.id) {
+          const realId = response.data[0].id;
+          console.log(`✅ ID trouvé via recherche email:`, realId);
+          return realId;
+        }
+      } catch (searchError) {
+        console.log('❌ Recherche par email échouée');
+      }
+    }
+    
+    console.warn('⚠️ [UserService] Impossible de récupérer le vrai ID');
+    return null;
+    
+  } catch (error) {
+    console.error('❌ [UserService] Erreur récupération ID:', error);
+    return null;
+  }
+};
+
+/**
+ * Corrige automatiquement l'ID utilisateur si = 0
+ */
+export const autoFixUserId = async (): Promise<boolean> => {
+  const currentUser = getCurrentUser();
+  
+  if (currentUser && currentUser.id === 0) {
+    console.warn('⚠️ [UserService] Détection ID=0, correction automatique...');
+    const realId = await fetchUserRealId();
+    
+    if (realId) {
+      console.log('✅ [UserService] ID corrigé automatiquement:', realId);
+      
+      // Mettre à jour l'utilisateur
+      currentUser.id = realId;
+      
+      // Sauvegarder dans toutes les clés
+      localStorage.setItem('current_user', JSON.stringify(currentUser));
+      localStorage.setItem('user', JSON.stringify(currentUser));
+      
+      return true;
+    } else {
+      console.warn('⚠️ [UserService] Impossible de corriger ID=0');
+    }
+  }
+  
+  return false;
+};
+
+/**
+ * Force la vérification et correction de l'ID
+ */
+export const ensureValidUserId = async (): Promise<number | null> => {
+  try {
+    const currentUser = getCurrentUser();
+    
+    if (!currentUser) {
+      console.log('❌ [UserService] Aucun utilisateur pour vérification ID');
+      return null;
+    }
+    
+    // Si ID déjà valide, retourner
+    if (currentUser.id && currentUser.id !== 0) {
+      console.log('✅ [UserService] ID déjà valide:', currentUser.id);
+      return currentUser.id;
+    }
+    
+    // Sinon, essayer de corriger
+    console.log('🔄 [UserService] Vérification ID utilisateur...');
+    const fixed = await autoFixUserId();
+    
+    if (fixed) {
+      const updatedUser = getCurrentUser();
+      return updatedUser?.id || null;
+    }
+    
+    return null;
+    
+  } catch (error) {
+    console.error('❌ [UserService] Erreur vérification ID:', error);
+    return null;
+  }
+};
+
+// ==============================
+// USER REFRESH
+// ==============================
+
+export const refreshCurrentUser = async (): Promise<User | null> => {
+  try {
+    console.log('🔄 [UserService] Rafraîchissement...');
+    
+    const token = getAuthToken();
+    if (!token) {
+      console.log('❌ Aucun token');
+      return null;
+    }
+    
     if (isTokenExpired(token)) {
-      console.log('⚠️ [UserService] Token expiré, déconnexion...');
+      console.log('⚠️ Token expiré');
       clearAuthData();
       return null;
     }
     
-    // Appel API pour récupérer les données utilisateur à jour
-    const response = await api.get(AUTH_CONFIG.ME_ENDPOINT, {
-      timeout: AUTH_CONFIG.REFRESH_TIMEOUT
-    });
+    const response = await api.get(AUTH_CONFIG.ME_ENDPOINT);
     
     if (!response.data) {
-      throw new Error('Aucune donnée reçue du serveur');
+      throw new Error('Aucune donnée');
     }
     
-    // Extraire les données utilisateur (adaptez selon votre API)
     const userData: User = response.data.user || response.data;
     
     if (!userData || !userData.email) {
-      throw new Error('Données utilisateur invalides');
+      throw new Error('Données invalides');
     }
     
-    // Mettre à jour le localStorage
+    // Sauvegarder dans toutes les clés
     localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(userData));
+    localStorage.setItem('user', JSON.stringify(userData));
     
-    console.log('✅ [UserService] Utilisateur rafraîchi:', userData.email);
-    console.log('📊 [UserService] Rôles mis à jour:', userData.roles);
+    console.log('✅ Utilisateur rafraîchi:', { email: userData.email, id: userData.id });
     
     return userData;
     
   } catch (error: any) {
-    console.error('❌ [UserService] Erreur rafraîchissement utilisateur:', error);
+    console.error('❌ Erreur rafraîchissement:', error);
     
-    // Ne pas déconnecter en cas d'erreur réseau ou serveur temporaire
-    if (error.code === 'ERR_NETWORK' || error.code === 'ECONNABORTED') {
-      console.log('🌐 [UserService] Erreur réseau, conservation données locales');
-      return getCurrentUser(); // Retourner données locales
+    // En cas d'erreur, garder l'utilisateur actuel
+    const currentUser = getCurrentUser();
+    if (currentUser) {
+      console.log('📦 Retour utilisateur courant');
+      return currentUser;
     }
     
-    // Si erreur 401, le token est invalide
-    if (error.response?.status === 401) {
-      console.log('🔐 [UserService] Token invalide, déconnexion...');
-      clearAuthData();
-      return null;
-    }
-    
-    // Pour les autres erreurs, retourner l'utilisateur local
-    return getCurrentUser();
+    return null;
   }
 };
 
-// Alias pour compatibilité avec le code existant
 export const refreshUserData = refreshCurrentUser;
 
 // ==============================
@@ -379,7 +536,7 @@ export const registerUser = async (data: RegisterUserData): Promise<User> => {
     const errors: string[] = [];
     
     if (!data.fullName?.trim() || data.fullName.trim().length < 2) {
-      errors.push('Le nom complet doit contenir au moins 2 caractères');
+      errors.push('Nom complet 2 caractères minimum');
     }
     
     if (!validateEmail(data.email)) {
@@ -391,7 +548,7 @@ export const registerUser = async (data: RegisterUserData): Promise<User> => {
     }
     
     if (!validatePassword(data.password)) {
-      errors.push('Le mot de passe doit contenir au moins 6 caractères');
+      errors.push('Mot de passe 6 caractères minimum');
     }
     
     if (errors.length > 0) {
@@ -411,10 +568,11 @@ export const registerUser = async (data: RegisterUserData): Promise<User> => {
     
     const response = await api.post<User>('/users', payload);
     
+    // Auto-connexion après inscription
     try {
       await loginUser(data.email, data.password);
     } catch (loginError) {
-      // Ignorer erreur connexion auto
+      console.warn('⚠️ Auto-connexion après inscription échouée');
     }
     
     return response.data;
@@ -451,6 +609,7 @@ export const updateUserProfile = async (userId: number, data: UpdateUserData): P
     if (currentUser?.id === userId) {
       const updatedUser = { ...currentUser, ...response.data };
       localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(updatedUser));
+      localStorage.setItem('user', JSON.stringify(updatedUser));
     }
     
     return response.data;
@@ -460,6 +619,8 @@ export const updateUserProfile = async (userId: number, data: UpdateUserData): P
     throw error;
   }
 };
+
+export const updateUser = updateUserProfile;
 
 export const getUsersList = async (page: number = 1, limit: number = 30): Promise<{ users: User[]; total: number }> => {
   try {
@@ -479,7 +640,7 @@ export const getUsersList = async (page: number = 1, limit: number = 30): Promis
       };
     }
     
-    throw new UserServiceError('Format de réponse inattendu', 'UNEXPECTED_FORMAT', 500);
+    throw new UserServiceError('Format inattendu', 'UNEXPECTED_FORMAT', 500);
     
   } catch (error: any) {
     console.error('❌ Erreur récupération utilisateurs:', error);
@@ -487,11 +648,12 @@ export const getUsersList = async (page: number = 1, limit: number = 30): Promis
   }
 };
 
+export const getUsers = getUsersList;
+
 export const getUserById = async (id: number): Promise<User> => {
   try {
     const response = await api.get<User>(`/users/${id}`);
     return response.data;
-    
   } catch (error: any) {
     console.error(`❌ Erreur récupération utilisateur ${id}:`, error);
     throw error;
@@ -499,7 +661,7 @@ export const getUserById = async (id: number): Promise<User> => {
 };
 
 // ==============================
-// ADMIN MANAGEMENT FUNCTIONS
+// ADMIN FUNCTIONS
 // ==============================
 
 export const promoteToAdmin = async (userId: number): Promise<User> => {
@@ -560,16 +722,6 @@ export const deactivateUser = async (userId: number): Promise<User> => {
 };
 
 // ==============================
-// ALIAS POUR COMPATIBILITÉ
-// ==============================
-
-// Alias pour getUsers (compatibilité avec code existant)
-export const getUsers = getUsersList;
-
-// Alias pour updateUser (compatibilité)
-export const updateUser = updateUserProfile;
-
-// ==============================
 // UTILITIES
 // ==============================
 
@@ -604,52 +756,28 @@ export const testAPIConnection = async (): Promise<{
 };
 
 export const debugAuth = (): void => {
-  console.group('🔍 [UserService] DEBUG AUTHENTIFICATION');
+  console.group('🔍 [UserService] DEBUG COMPLET');
   
-  Object.values(STORAGE_KEYS).forEach(key => {
-    const value = localStorage.getItem(key);
-    console.log(`${key}:`, value ? 'présent' : 'NULL');
-  });
-  
-  console.log('Authentifié:', isAuthenticated());
-  console.log('Utilisateur:', getCurrentUser()?.email || 'NULL');
-  
-  const token = getAuthToken();
-  if (token) {
-    const payload = decodeJWT(token);
-    console.log('Token expiré:', isTokenExpired(token));
-    console.log('Token payload:', payload);
+  console.log('=== LOCALSTORAGE ===');
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    console.log(`${key}:`, localStorage.getItem(key!));
   }
+  
+  console.log('=== AUTH STATE ===');
+  console.log('Token:', getAuthToken() ? 'PRÉSENT' : 'ABSENT');
+  console.log('Utilisateur:', getCurrentUser());
+  console.log('Authentifié:', isAuthenticated());
   
   console.groupEnd();
 };
 
 export const forceLogout = (): void => {
+  console.log('🚨 Déconnexion forcée');
   clearAuthData();
+  
   if (typeof window !== 'undefined') {
     window.location.href = '/login';
-  }
-};
-
-export const validateAndRefreshAuth = async (): Promise<RefreshUserResponse> => {
-  try {
-    if (!isAuthenticated()) {
-      return { success: false, user: null, error: 'Non authentifié' };
-    }
-    
-    const user = await refreshCurrentUser();
-    
-    if (user) {
-      return { success: true, user };
-    } else {
-      return { success: false, user: null, error: 'Impossible de rafraîchir' };
-    }
-  } catch (error: any) {
-    return { 
-      success: false, 
-      user: null, 
-      error: error.message || 'Erreur inconnue' 
-    };
   }
 };
 
@@ -657,27 +785,30 @@ export const validateAndRefreshAuth = async (): Promise<RefreshUserResponse> => 
 // DEFAULT EXPORT
 // ==============================
 
-export default {
-  // Authentication
+const UserService = {
+  // Auth
   loginUser,
   logoutUser,
+  registerUser,
   isAuthenticated,
   getCurrentUser,
   getAuthToken,
+  refreshCurrentUser,
+  refreshUserData,
   
-  // Registration
-  registerUser,
+  // ID Correction
+  fetchUserRealId,
+  autoFixUserId,
+  ensureValidUserId,
   
   // User Management
-  refreshCurrentUser, // NOUVELLE FONCTION
-  refreshUserData,    // Alias
   updateUserProfile,
-  updateUser, // Alias
+  updateUser,
   getUsersList,
-  getUsers, // Alias
+  getUsers,
   getUserById,
   
-  // Admin Management
+  // Admin Functions
   promoteToAdmin,
   demoteFromAdmin,
   deleteUser,
@@ -688,8 +819,8 @@ export default {
   testAPIConnection,
   debugAuth,
   forceLogout,
-  validateAndRefreshAuth,
-  
-  // Error class
+  clearAuthData,
   UserServiceError
 };
+
+export default UserService;

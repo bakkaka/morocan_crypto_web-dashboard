@@ -1,4 +1,4 @@
-// src/contexts/AuthContext.tsx - VERSION OPTIMISÉE AVEC refreshUser
+// src/contexts/AuthContext.tsx - VERSION COMPLÈTE CORRIGÉE
 import React, { createContext, useState, useContext, useEffect, useMemo, useCallback } from 'react';
 import { 
   loginUser, 
@@ -6,6 +6,10 @@ import {
   logoutUser, 
   getCurrentUser,
   refreshCurrentUser,
+  debugAuth,
+  isAuthenticated as checkAuth,
+  autoFixUserId,
+  ensureValidUserId,
   type LoginResponse,
   type RegisterUserData 
 } from '../api/UserService';
@@ -25,7 +29,9 @@ interface AuthContextType {
   register: (userData: RegisterUserData) => Promise<void>;
   logout: () => void;
   checkAuthStatus: () => Promise<void>;
-  refreshUser: () => Promise<void>; // <-- AJOUTÉ ICI
+  refreshUser: () => Promise<void>;
+  debugAuth: () => void;
+  fixUserId: () => Promise<boolean>;
 }
 
 // ==============================
@@ -44,165 +50,209 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [initialized, setInitialized] = useState<boolean>(false);
 
   // ==============================
-  // CORE AUTH FUNCTIONS
+  // CORE FUNCTIONS
   // ==============================
 
-  /**
-   * Vérifie le statut d'authentification au chargement
-   */
   const checkAuthStatus = useCallback(async (): Promise<void> => {
     try {
       setLoading(true);
-      console.log('🔍 [AuthContext] Vérification du statut d\'authentification...');
+      console.log('🔍 [AuthContext] Vérification DÉTAILLÉE...');
+      
+      // DEBUG: Afficher tout localStorage
+      console.log('📦 localStorage actuel:');
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        console.log(`  ${key}:`, localStorage.getItem(key!));
+      }
       
       const userData = getCurrentUser();
-      console.log('🔍 [AuthContext] Utilisateur depuis storage:', userData);
+      const isAuthValid = checkAuth();
       
-      setUser(userData);
-      
-      if (userData) {
-        console.log('✅ [AuthContext] Utilisateur connecté détecté:', userData.email);
-        console.log('👥 [AuthContext] Rôles de l\'utilisateur:', userData.roles);
+      if (userData && isAuthValid) {
+        console.log('✅ [AuthContext] Utilisateur TROUVÉ (même ID=0):', userData.email);
+        console.log('📊 Détails:', { 
+          id: userData.id, 
+          email: userData.email,
+          roles: userData.roles 
+        });
+        
+        // Vérifier et corriger ID=0 si nécessaire
+        if (userData.id === 0) {
+          console.warn('⚠️ ID utilisateur = 0, tentative de correction...');
+          try {
+            const fixed = await autoFixUserId();
+            if (fixed) {
+              const updatedUser = getCurrentUser();
+              if (updatedUser) {
+                console.log('✅ ID corrigé:', updatedUser.id);
+                setUser(updatedUser);
+              } else {
+                setUser(userData);
+              }
+            } else {
+              console.log('⚠️ ID toujours 0, garder utilisateur quand même');
+              setUser(userData);
+            }
+          } catch (fixError) {
+            console.error('❌ Erreur correction ID:', fixError);
+            setUser(userData);
+          }
+        } else {
+          setUser(userData);
+        }
       } else {
-        console.log('🔐 [AuthContext] Aucun utilisateur connecté');
+        console.log('❌ [AuthContext] Aucun utilisateur trouvé');
+        console.log('🔍 Recherche manuelle...');
+        
+        // Recherche manuelle de secours
+        const manualUserStr = localStorage.getItem('user');
+        if (manualUserStr) {
+          try {
+            const manualUser = JSON.parse(manualUserStr);
+            if (manualUser && manualUser.email) {
+              console.log('🎯 Utilisateur trouvé MANUELLEMENT:', manualUser.email);
+              setUser(manualUser);
+              return;
+            }
+          } catch (e) {
+            console.error('❌ Erreur parsing manuel:', e);
+          }
+        }
+        
+        setUser(null);
       }
       
     } catch (error) {
-      console.error('❌ [AuthContext] Erreur lors de la vérification d\'authentification:', error);
+      console.error('❌ [AuthContext] Erreur vérification:', error);
       setUser(null);
     } finally {
       setLoading(false);
       setInitialized(true);
-      console.log('🔍 [AuthContext] Vérification terminée - Loading:', false);
     }
   }, []);
 
-  /**
-   * Rafraîchit les données utilisateur depuis l'API
-   * Compatible avec UserBankDetails
-   */
   const refreshUser = useCallback(async (): Promise<void> => {
     try {
-      console.log('🔄 [AuthContext] Rafraîchissement des données utilisateur...');
+      console.log('🔄 [AuthContext] Rafraîchissement...');
       
-      const token = localStorage.getItem('jwt_token');
-      if (!token) {
-        console.log('🔐 [AuthContext] Aucun token trouvé, déconnexion...');
-        setUser(null);
-        return;
-      }
-
-      // Vérifier si UserService a une fonction refreshCurrentUser
-      // Sinon, utiliser getCurrentUser ou appeler l'API directement
-      let userData: User | null = null;
-      
-      // Essayer d'abord la fonction de rafraîchissement
-      if (refreshCurrentUser) {
-        userData = await refreshCurrentUser();
-      } else {
-        // Fallback: récupérer depuis le localStorage ou API
-        userData = getCurrentUser();
-        
-        // Si pas dans localStorage, faire un appel API
-        if (!userData) {
-          // Vous devrez peut-être implémenter cette fonction dans UserService
-          // userData = await fetchCurrentUserFromAPI();
-        }
-      }
+      const userData = await refreshCurrentUser();
       
       if (userData) {
-        console.log('✅ [AuthContext] Utilisateur rafraîchi:', userData.email);
+        console.log('✅ Utilisateur rafraîchi:', userData.email);
         setUser(userData);
       } else {
-        console.warn('⚠️ [AuthContext] Impossible de rafraîchir l\'utilisateur');
-        // Conserver l'utilisateur actuel si existant
+        console.warn('⚠️ Impossible de rafraîchir');
       }
       
     } catch (error) {
-      console.error('❌ [AuthContext] Erreur lors du rafraîchissement:', error);
-      // Ne pas déconnecter en cas d'erreur de rafraîchissement
-      // L'utilisateur peut continuer avec les données en cache
+      console.error('❌ Erreur rafraîchissement:', error);
     }
   }, []);
 
-  /**
-   * Connexion utilisateur
-   */
   const login = useCallback(async (email: string, password: string): Promise<void> => {
     try {
       setLoading(true);
-      console.log('🔄 [AuthContext] Début de la connexion...', { email });
+      console.log('🔄 [AuthContext] Connexion démarre...', { email });
       
       const response: LoginResponse = await loginUser(email, password);
       
-      console.log('✅ [AuthContext] Réponse de connexion reçue:');
-      console.log('   - User:', response.user);
-      console.log('   - Token présent:', !!response.token);
+      console.log('🎉 [AuthContext] Connexion RÉUSSIE!');
+      console.log('📊 Détails:', {
+        email: response.user.email,
+        id: response.user.id,
+        roles: response.user.roles
+      });
+      
+      // Vérification IMMÉDIATE après connexion
+      const verifyUser = getCurrentUser();
+      console.log('🔍 Vérification post-connexion:', verifyUser ? 'OK' : 'ÉCHEC');
       
       setUser(response.user);
       
-      console.log('✅ [AuthContext] Utilisateur défini dans le state:', response.user.email);
-      console.log('✅ [AuthContext] Rôles définis:', response.user.roles);
+      // Si ID=0, essayer de le corriger immédiatement
+      if (response.user.id === 0) {
+        console.warn('⚠️ ID=0 après connexion, correction différée...');
+        // On corrigera plus tard dans checkAuthStatus
+      }
+      
+      // Forcer une vérification après un court délai
+      setTimeout(() => {
+        checkAuthStatus();
+      }, 100);
       
     } catch (error) {
-      console.error('❌ [AuthContext] Erreur lors de la connexion:', error);
+      console.error('❌ [AuthContext] Erreur connexion:', error);
       throw error;
     } finally {
       setLoading(false);
-      console.log('🏁 [AuthContext] Connexion terminée - Loading:', false);
     }
-  }, []);
+  }, [checkAuthStatus]);
 
-  /**
-   * Inscription utilisateur
-   */
   const register = useCallback(async (userData: RegisterUserData): Promise<void> => {
     try {
       setLoading(true);
-      console.log('📝 [AuthContext] Début de l\'inscription...', { email: userData.email });
+      console.log('📝 [AuthContext] Inscription...', { email: userData.email });
       
       await registerUser(userData);
-      console.log('✅ [AuthContext] Inscription réussie');
+      console.log('✅ Inscription réussie');
       
     } catch (error) {
-      console.error('❌ [AuthContext] Erreur lors de l\'inscription:', error);
+      console.error('❌ Erreur inscription:', error);
       throw error;
     } finally {
       setLoading(false);
-      console.log('🏁 [AuthContext] Inscription terminée - Loading:', false);
     }
   }, []);
 
-  /**
-   * Déconnexion utilisateur
-   */
   const logout = useCallback((): void => {
-    console.log('👋 [AuthContext] Déconnexion en cours...');
+    console.log('👋 [AuthContext] Déconnexion demandée');
+    
     setUser(null);
     logoutUser();
-    console.log('✅ [AuthContext] Déconnexion terminée');
+    
+    console.log('✅ [AuthContext] Déconnexion exécutée');
+  }, []);
+
+  const debugAuthContext = useCallback((): void => {
+    console.log('🔧 [AuthContext] Debug manuel');
+    debugAuth();
+    checkAuthStatus();
+  }, [checkAuthStatus]);
+
+  const fixUserId = useCallback(async (): Promise<boolean> => {
+    try {
+      console.log('🔧 [AuthContext] Correction manuelle ID...');
+      const fixed = await ensureValidUserId();
+      
+      if (fixed) {
+        const updatedUser = getCurrentUser();
+        if (updatedUser) {
+          setUser(updatedUser);
+          console.log('✅ ID corrigé manuellement:', updatedUser.id);
+        }
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('❌ Erreur correction manuelle ID:', error);
+      return false;
+    }
   }, []);
 
   // ==============================
   // EFFECTS
   // ==============================
 
-  /**
-   * Initialisation au montage du composant
-   */
   useEffect(() => {
-    console.log('🚀 [AuthContext] Initialisation du AuthProvider');
+    console.log('🚀 [AuthContext] Initialisation du provider');
     checkAuthStatus();
   }, [checkAuthStatus]);
 
-  /**
-   * Écoute les changements de localStorage (pour synchroniser les onglets)
-   */
   useEffect(() => {
     const handleStorageChange = (event: StorageEvent) => {
-      if (event.key === 'user' || event.key === 'jwt_token') {
-        console.log('🔄 [AuthContext] Changement de localStorage détecté:', event.key);
-        checkAuthStatus();
+      if (event.key === 'user' || event.key === 'jwt_token' || event.key === 'current_user') {
+        console.log('🔄 Changement storage détecté:', event.key);
+        setTimeout(() => checkAuthStatus(), 100);
       }
     };
 
@@ -218,17 +268,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // ==============================
 
   const { isAuthenticated, isAdmin, isUser } = useMemo(() => {
-    const isAuthenticated = !!user;
+    const isAuthenticated = !!user && checkAuth();
     const isAdmin = user?.roles?.includes('ROLE_ADMIN') || false;
     const isUser = user?.roles?.includes('ROLE_USER') || false;
 
     if (initialized) {
-      console.log('📊 [AuthContext] État actuel:', {
+      console.log('📊 [AuthContext] État FINAL:', {
         user: user?.email || 'null',
         isAuthenticated,
         isAdmin,
         isUser,
-        loading
+        loading,
+        id: user?.id
       });
     }
 
@@ -239,7 +290,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // CONTEXT VALUE
   // ==============================
 
-  const contextValue = useMemo(() => ({
+  const contextValue = useMemo((): AuthContextType => ({
     user,
     isAuthenticated,
     isAdmin,
@@ -249,7 +300,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     register,
     logout,
     checkAuthStatus,
-    refreshUser // <-- AJOUTÉ ICI
+    refreshUser,
+    debugAuth: debugAuthContext,
+    fixUserId
   }), [
     user, 
     isAuthenticated, 
@@ -260,7 +313,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     register, 
     logout, 
     checkAuthStatus,
-    refreshUser
+    refreshUser,
+    debugAuthContext,
+    fixUserId
   ]);
 
   // ==============================
@@ -282,7 +337,7 @@ export function useAuth(): AuthContextType {
   const context = useContext(AuthContext);
   
   if (context === undefined) {
-    throw new Error('useAuth doit être utilisé à l\'intérieur d\'un AuthProvider');
+    throw new Error('useAuth doit être utilisé dans un AuthProvider');
   }
   
   return context;
