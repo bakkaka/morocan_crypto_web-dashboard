@@ -14,10 +14,10 @@ import TransactionList from "./components/TransactionList";
 import Profile from "./components/Profile";
 import UserBankDetails from "./components/UserBankDetails";
 import Currency from './components/Currency';
-// AJOUTEZ CE COMPOSANT
 import PublicAdList from "./components/PublicAdList";
+import NotFound from "./components/NotFound";
 
-// Route protégée basique - CORRIGÉE
+// Route protégée basique
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isAuthenticated, loading } = useAuth();
   
@@ -34,7 +34,7 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
   return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />;
 };
 
-// Route protégée pour ADMIN seulement - CORRIGÉE
+// Route protégée pour ADMIN seulement
 const AdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isAuthenticated, isAdmin, loading } = useAuth();
   
@@ -59,7 +59,7 @@ const AdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   return <>{children}</>;
 };
 
-// Route protégée pour USER seulement - CORRIGÉE
+// Route protégée pour USER seulement
 const UserRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isAuthenticated, isUser, loading } = useAuth();
   
@@ -84,16 +84,15 @@ const UserRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   return <>{children}</>;
 };
 
-// Page Portefeuille - OPTIMISÉE
+// Page Portefeuille
 const WalletPage: React.FC = () => {
   const { user } = useAuth();
   
   return (
     <div className="container-fluid py-4">
-      {/* Header avec solde */}
       <div className="row mb-4">
         <div className="col-12">
-          <div className="card bg-gradient-to-r from-primary to-info text-white">
+          <div className="card bg-primary text-white">
             <div className="card-body py-5">
               <div className="row align-items-center">
                 <div className="col-md-8">
@@ -115,10 +114,8 @@ const WalletPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Actions et contenu */}
       <div className="row">
         <div className="col-lg-8">
-          {/* Actions rapides */}
           <div className="card shadow-sm mb-4">
             <div className="card-header bg-light">
               <h5 className="card-title mb-0">
@@ -146,7 +143,6 @@ const WalletPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Transactions récentes */}
           <div className="card shadow-sm">
             <div className="card-header bg-light d-flex justify-content-between align-items-center">
               <h5 className="card-title mb-0">
@@ -167,7 +163,6 @@ const WalletPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Statistiques latérales */}
         <div className="col-lg-4">
           <div className="card shadow-sm mb-4">
             <div className="card-header bg-light">
@@ -198,7 +193,6 @@ const WalletPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Information sécurité */}
           <div className="alert alert-info">
             <h6 className="alert-heading">
               <i className="bi bi-shield-check me-2"></i>
@@ -215,11 +209,10 @@ const WalletPage: React.FC = () => {
   );
 };
 
-// Page Analytics Admin - OPTIMISÉE
+// Page Analytics Admin
 const AnalyticsPage: React.FC = () => {
   return (
     <div className="container-fluid py-4">
-      {/* Header Admin */}
       <div className="row mb-4">
         <div className="col-12">
           <div className="card bg-dark text-white">
@@ -234,7 +227,6 @@ const AnalyticsPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Statistiques rapides */}
       <div className="row mb-4">
         <div className="col-xl-3 col-md-6 mb-3">
           <div className="card bg-primary text-white shadow-sm">
@@ -261,7 +253,7 @@ const AnalyticsPage: React.FC = () => {
               <h2 className="fw-bold">24</h2>
               <p className="mb-0">Transactions/Jour</p>
             </div>
- </div>
+          </div>
         </div>
         <div className="col-xl-3 col-md-6 mb-3">
           <div className="card bg-warning text-dark shadow-sm">
@@ -274,7 +266,6 @@ const AnalyticsPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Contenu principal */}
       <div className="row">
         <div className="col-lg-8">
           <div className="card shadow-sm h-100">
@@ -319,7 +310,7 @@ const AnalyticsPage: React.FC = () => {
   );
 };
 
-// Page "Comment ça marche" - AJOUTÉE
+// Page "Comment ça marche"
 const HowItWorksPage: React.FC = () => {
   return (
     <div className="container py-5">
@@ -334,83 +325,27 @@ const HowItWorksPage: React.FC = () => {
       </div>
 
       <div className="row g-4">
-        <div className="col-md-4">
-          <div className="card h-100 border-0 shadow-sm">
-            <div className="card-body text-center p-4">
-              <div className="bg-primary bg-opacity-10 rounded-circle d-inline-flex align-items-center justify-content-center mb-4" style={{width: '80px', height: '80px'}}>
-                <i className="bi bi-person-plus fs-2 text-primary"></i>
+        {[
+          { icon: 'bi-person-plus', color: 'primary', title: '1. Inscription', text: 'Créez votre compte gratuitement en moins de 2 minutes.' },
+          { icon: 'bi-bank', color: 'success', title: '2. Ajoutez vos RIB', text: 'Configurez vos coordonnées bancaires pour recevoir et envoyer des virements.' },
+          { icon: 'bi-megaphone', color: 'warning', title: '3. Créez une annonce', text: 'Publiez votre offre d\'achat ou de vente. Fixez vos prix et conditions.' },
+          { icon: 'bi-chat-left-text', color: 'info', title: '4. Négociez', text: 'Contactez d\'autres utilisateurs via notre système de messagerie sécurisé.' },
+          { icon: 'bi-shield-check', color: 'danger', title: '5. Échangez en sécurité', text: 'Notre système d\'escrow garantit la sécurité des fonds.' },
+        ].map((step, index) => (
+          <div key={index} className={step.title.includes('4.') || step.title.includes('5.') ? 'col-md-6' : 'col-md-4'}>
+            <div className="card h-100 border-0 shadow-sm">
+              <div className="card-body text-center p-4">
+                <div className={`bg-${step.color} bg-opacity-10 rounded-circle d-inline-flex align-items-center justify-content-center mb-4`} style={{width: '80px', height: '80px'}}>
+                  <i className={`bi ${step.icon} fs-2 text-${step.color}`}></i>
+                </div>
+                <h4 className="card-title">{step.title}</h4>
+                <p className="card-text text-muted">{step.text}</p>
               </div>
-              <h4 className="card-title">1. Inscription</h4>
-              <p className="card-text text-muted">
-                Créez votre compte gratuitement en moins de 2 minutes.
-                Vérifiez votre email et complétez votre profil.
-              </p>
             </div>
           </div>
-        </div>
-
-        <div className="col-md-4">
-          <div className="card h-100 border-0 shadow-sm">
-            <div className="card-body text-center p-4">
-              <div className="bg-success bg-opacity-10 rounded-circle d-inline-flex align-items-center justify-content-center mb-4" style={{width: '80px', height: '80px'}}>
-                <i className="bi bi-bank fs-2 text-success"></i>
-              </div>
-              <h4 className="card-title">2. Ajoutez vos RIB</h4>
-              <p className="card-text text-muted">
-                Configurez vos coordonnées bancaires pour recevoir et envoyer des virements.
-                Plusieurs banques possibles.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="col-md-4">
-          <div className="card h-100 border-0 shadow-sm">
-            <div className="card-body text-center p-4">
-              <div className="bg-warning bg-opacity-10 rounded-circle d-inline-flex align-items-center justify-content-center mb-4" style={{width: '80px', height: '80px'}}>
-                <i className="bi bi-megaphone fs-2 text-warning"></i>
-              </div>
-              <h4 className="card-title">3. Créez une annonce</h4>
-              <p className="card-text text-muted">
-                Publiez votre offre d'achat ou de vente.
-                Fixez vos prix et conditions.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="col-md-6">
-          <div className="card h-100 border-0 shadow-sm">
-            <div className="card-body text-center p-4">
-              <div className="bg-info bg-opacity-10 rounded-circle d-inline-flex align-items-center justify-content-center mb-4" style={{width: '80px', height: '80px'}}>
-                <i className="bi bi-chat-left-text fs-2 text-info"></i>
-              </div>
-              <h4 className="card-title">4. Négociez</h4>
-              <p className="card-text text-muted">
-                Contactez d'autres utilisateurs via notre système de messagerie sécurisé.
-                Discutez des détails de la transaction.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="col-md-6">
-          <div className="card h-100 border-0 shadow-sm">
-            <div className="card-body text-center p-4">
-              <div className="bg-danger bg-opacity-10 rounded-circle d-inline-flex align-items-center justify-content-center mb-4" style={{width: '80px', height: '80px'}}>
-                <i className="bi bi-shield-check fs-2 text-danger"></i>
-              </div>
-              <h4 className="card-title">5. Échangez en sécurité</h4>
-              <p className="card-text text-muted">
-                Notre système d'escrow garantit la sécurité des fonds.
-                Les cryptos sont libérées une fois le paiement confirmé.
-              </p>
-            </div>
-          </div>
-        </div>
+        ))}
       </div>
 
-      {/* CTA */}
       <div className="text-center mt-5">
         <div className="card bg-primary bg-opacity-10 border-primary">
           <div className="card-body p-5">
@@ -429,7 +364,7 @@ const HowItWorksPage: React.FC = () => {
   );
 };
 
-// Page "À propos" - AJOUTÉE
+// Page "À propos"
 const AboutPage: React.FC = () => {
   return (
     <div className="container py-5">
@@ -498,36 +433,48 @@ const AboutPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Stats */}
       <div className="row text-center mb-5">
-        <div className="col-md-3">
-          <div className="bg-light p-4 rounded-3">
-            <h2 className="text-primary fw-bold">50M+</h2>
-            <p className="text-muted">DH Échangés</p>
+        {[
+          { value: '50M+', label: 'DH Échangés', color: 'primary' },
+          { value: '10K+', label: 'Utilisateurs', color: 'success' },
+          { value: '99.8%', label: 'Taux de Satisfaction', color: 'warning' },
+          { value: '24/7', label: 'Support Client', color: 'info' },
+        ].map((stat, index) => (
+          <div key={index} className="col-md-3">
+            <div className="bg-light p-4 rounded-3">
+              <h2 className={`text-${stat.color} fw-bold`}>{stat.value}</h2>
+              <p className="text-muted">{stat.label}</p>
+            </div>
           </div>
-        </div>
-        <div className="col-md-3">
-          <div className="bg-light p-4 rounded-3">
-            <h2 className="text-success fw-bold">10K+</h2>
-            <p className="text-muted">Utilisateurs</p>
-          </div>
-        </div>
-        <div className="col-md-3">
-          <div className="bg-light p-4 rounded-3">
-            <h2 className="text-warning fw-bold">99.8%</h2>
-            <p className="text-muted">Taux de Satisfaction</p>
-          </div>
-        </div>
-        <div className="col-md-3">
-          <div className="bg-light p-4 rounded-3">
-            <h2 className="text-info fw-bold">24/7</h2>
-            <p className="text-muted">Support Client</p>
-          </div>
-        </div>
+        ))}
       </div>
     </div>
   );
 };
+
+// Page Contact simplifiée
+const ContactPage: React.FC = () => (
+  <div className="container py-5">
+    <h1 className="display-5 fw-bold mb-4">Contactez-nous</h1>
+    <p className="lead mb-5">Page contact en développement...</p>
+  </div>
+);
+
+// Page Confidentialité simplifiée
+const PrivacyPage: React.FC = () => (
+  <div className="container py-5">
+    <h1 className="display-5 fw-bold mb-4">Politique de confidentialité</h1>
+    <p className="lead mb-5">Page en développement...</p>
+  </div>
+);
+
+// Page d'édition d'annonce simplifiée
+const AdEditPage: React.FC = () => (
+  <div className="container-fluid py-4">
+    <h2>Édition d'annonce</h2>
+    <p>Fonctionnalité en développement...</p>
+  </div>
+);
 
 function App() {
   return (
@@ -543,20 +490,11 @@ function App() {
             <Route path="market" element={<PublicAdList />} />
             <Route path="how-it-works" element={<HowItWorksPage />} />
             <Route path="about" element={<AboutPage />} />
+            <Route path="contact" element={<ContactPage />} />
+            <Route path="privacy" element={<PrivacyPage />} />
             
-            {/* Pages de contenu (à développer) */}
-            <Route path="contact" element={
-              <div className="container py-5">
-                <h1>Contact</h1>
-                <p>Page contact en construction...</p>
-              </div>
-            } />
-            <Route path="privacy" element={
-              <div className="container py-5">
-                <h1>Politique de confidentialité</h1>
-                <p>Page en construction...</p>
-              </div>
-            } />
+            {/* Page 404 à l'intérieur du layout public */}
+            <Route path="*" element={<NotFound />} />
           </Route>
 
           {/* ⭐ PROTECTED ROUTES avec DashboardLayout */}
@@ -580,64 +518,39 @@ function App() {
               </UserRoute>
             } />
             
-            {/* Devises (accessible à tous les utilisateurs connectés) */}
+            {/* Devises */}
             <Route path="currencies" element={<Currency />} />
             
             {/* ANNONCES */}
             <Route path="ads">
               <Route index element={<AdList filter="all" />} />
-              <Route path="create" element={
-                <UserRoute>
-                  <AdCreate />
-                </UserRoute>
-              } />
-              <Route path="my" element={
-                <UserRoute>
-                  <AdList filter="my-ads" />
-                </UserRoute>
-              } />
-              <Route path="edit/:id" element={
-                <UserRoute>
-                  <div className="container-fluid py-4">
-                    <h2>Édition d'annonce</h2>
-                    <p>Fonctionnalité en développement...</p>
-                  </div>
-                </UserRoute>
-              } />
+              <Route path="create" element={<UserRoute><AdCreate /></UserRoute>} />
+              <Route path="my" element={<UserRoute><AdList filter="my-ads" /></UserRoute>} />
+              <Route path="edit/:id" element={<UserRoute><AdEditPage /></UserRoute>} />
             </Route>
             
             {/* ⭐ ROUTES ADMIN */}
             <Route path="admin">
-              <Route path="users" element={
-                <AdminRoute>
-                  <UserList />
-                </AdminRoute>
-              } />
-              <Route path="ads" element={
-                <AdminRoute>
-                  <AdList filter="moderation" />
-                </AdminRoute>
-              } />
-              <Route path="analytics" element={
-                <AdminRoute>
-                  <AnalyticsPage />
-                </AdminRoute>
-              } />
-              <Route path="bank-details" element={
-                <AdminRoute>
-                  <UserBankDetails adminView={true} />
-                </AdminRoute>
-              } />
-              <Route path="currencies" element={
-                <AdminRoute>
-                  <Currency adminView={true} />
-                </AdminRoute>
-              } />
+              <Route path="users" element={<AdminRoute><UserList /></AdminRoute>} />
+              <Route path="ads" element={<AdminRoute><AdList filter="moderation" /></AdminRoute>} />
+              <Route path="analytics" element={<AdminRoute><AnalyticsPage /></AdminRoute>} />
+              <Route path="bank-details" element={<AdminRoute><UserBankDetails adminView={true} /></AdminRoute>} />
+              <Route path="currencies" element={<AdminRoute><Currency adminView={true} /></AdminRoute>} />
             </Route>
+            
+            {/* 404 dans dashboard */}
+            <Route path="*" element={
+              <div className="container-fluid py-4">
+                <h1>404 - Page non trouvée</h1>
+                <p>Cette page n'existe pas dans le dashboard.</p>
+              </div>
+            } />
           </Route>
 
-          {/* Redirection 404 */}
-          <Route path="*" element={<Navigate to="/" replace />} />
+          {/* Fallback global 404 (si aucune route ne correspond) */}
+          <Route path="*" element={<PublicLayout />}>
+  <Route index element={<NotFound />} />
+</Route>
         </Routes>
       </Router>
     </AuthProvider>
