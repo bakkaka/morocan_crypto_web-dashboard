@@ -1,147 +1,254 @@
 // src/components/PublicLayout.tsx
-import React from 'react';
-import { Link, useLocation } from 'react-router-dom';
+import React, { useState } from 'react';
+import { Link, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
-interface PublicLayoutProps {
-  children: React.ReactNode;
-}
-
-const PublicLayout: React.FC<PublicLayoutProps> = ({ children }) => {
-  const { isAuthenticated, user } = useAuth();
+const PublicLayout: React.FC = () => {
+  const { isAuthenticated, user, logout } = useAuth();
   const location = useLocation();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  const isActive = (path: string) => location.pathname === path;
+
+  const handleLogout = async () => {
+    await logout();
+    window.location.href = '/';
+  };
 
   return (
-    <div className="min-vh-100 bg-light">
-      {/* Navigation publique - TOUJOURS visible */}
-      <nav className="navbar navbar-expand-lg navbar-dark bg-primary shadow">
+    <div className="d-flex flex-column min-vh-100">
+      {/* NAVBAR */}
+      <nav className="navbar navbar-expand-lg navbar-dark navbar-gradient shadow-lg">
         <div className="container">
           {/* Logo */}
-          <Link className="navbar-brand fw-bold d-flex align-items-center" to="/">
-            <span className="bg-warning text-dark rounded px-2 py-1 me-2">₿</span>
-            MoroccanCrypto
+          <Link to="/" className="navbar-brand d-flex align-items-center">
+            <div className="bg-warning rounded p-2 me-2">
+              <span className="text-dark fw-bold fs-4">₿</span>
+            </div>
+            <span className="fs-3 fw-bold">CryptoMaroc</span>
           </Link>
 
-          {/* Bouton mobile */}
-          <button 
-            className="navbar-toggler" 
-            type="button" 
-            data-bs-toggle="collapse" 
-            data-bs-target="#publicNavbar"
+          {/* Mobile Menu Button */}
+          <button
+            className="navbar-toggler"
+            type="button"
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
           >
             <span className="navbar-toggler-icon"></span>
           </button>
 
-          {/* Navigation - TOUJOURS visible même connecté */}
-          <div className="collapse navbar-collapse" id="publicNavbar">
-            <div className="navbar-nav me-auto">
-              <Link 
-                className={`nav-link mx-2 ${location.pathname === '/' ? 'active' : ''}`} 
-                to="/"
-              >
-                Accueil
-              </Link>
-              <Link 
-                className={`nav-link mx-2 ${location.pathname === '/market' ? 'active' : ''}`} 
-                to="/market"
-              >
-                Marché
-              </Link>
-              <Link 
-                className={`nav-link mx-2 ${location.pathname === '/how-it-works' ? 'active' : ''}`} 
-                to="/how-it-works"
-              >
-                Comment ça marche
-              </Link>
-              
-              {/* Liens DASHBOARD visibles seulement si connecté */}
-              {isAuthenticated && (
+          {/* Navigation Links */}
+          <div className={`collapse navbar-collapse ${mobileMenuOpen ? 'show' : ''}`}>
+            <ul className="navbar-nav mx-auto mb-2 mb-lg-0">
+              <li className="nav-item">
                 <Link 
-                  className={`nav-link mx-2 ${location.pathname.startsWith('/dashboard') ? 'active' : ''}`} 
-                  to="/dashboard"
+                  to="/" 
+                  className={`nav-link ${isActive('/') ? 'active fw-bold' : ''}`}
+                  onClick={() => setMobileMenuOpen(false)}
                 >
-                  Tableau de Bord
+                  <i className="bi bi-house-door me-1"></i> Accueil
                 </Link>
-              )}
-            </div>
+              </li>
+              <li className="nav-item">
+                <Link 
+                  to="/market" 
+                  className={`nav-link ${isActive('/market') ? 'active fw-bold' : ''}`}
+                  onClick={() => setMobileMenuOpen(false)}
+                >
+                  <i className="bi bi-shop me-1"></i> Marketplace
+                </Link>
+              </li>
+              <li className="nav-item">
+                <Link 
+                  to="/how-it-works" 
+                  className={`nav-link ${isActive('/how-it-works') ? 'active fw-bold' : ''}`}
+                  onClick={() => setMobileMenuOpen(false)}
+                >
+                  <i className="bi bi-info-circle me-1"></i> Comment ça marche
+                </Link>
+              </li>
+              <li className="nav-item">
+                <Link 
+                  to="/about" 
+                  className={`nav-link ${isActive('/about') ? 'active fw-bold' : ''}`}
+                  onClick={() => setMobileMenuOpen(false)}
+                >
+                  <i className="bi bi-question-circle me-1"></i> À propos
+                </Link>
+              </li>
+            </ul>
 
-            {/* Actions utilisateur */}
-            <div className="navbar-nav align-items-center flex-row">
+            {/* Auth Buttons */}
+            <div className="d-flex flex-column flex-lg-row gap-2">
               {isAuthenticated ? (
-                // Si connecté - menu utilisateur
-                <div className="d-flex align-items-center">
-                  <span className="text-white me-3 d-none d-md-block">
-                    Bonjour, {user?.fullName}
-                  </span>
-                  <div className="dropdown">
-                    <button 
-                      className="btn btn-outline-light dropdown-toggle" 
-                      type="button" 
-                      data-bs-toggle="dropdown"
-                    >
-                      Mon Compte
-                    </button>
-                    <ul className="dropdown-menu dropdown-menu-end">
-                      <li>
-                        <Link className="dropdown-item" to="/dashboard">
-                          <i className="bi bi-speedometer2 me-2"></i>
-                          Tableau de Bord
-                        </Link>
-                      </li>
-                      <li>
-                        <Link className="dropdown-item" to="/dashboard/profile">
-                          <i className="bi bi-person me-2"></i>
-                          Mon Profil
-                        </Link>
-                      </li>
-                      <li><hr className="dropdown-divider" /></li>
-                      <li>
-                        <Link className="dropdown-item text-danger" to="/logout">
-                          <i className="bi bi-box-arrow-right me-2"></i>
-                          Déconnexion
-                        </Link>
-                      </li>
-                    </ul>
+                <>
+                  <div className="d-none d-lg-flex align-items-center me-3">
+                    <span className="text-white">
+                      <i className="bi bi-person-circle me-1"></i>
+                      Bonjour, {user?.fullName?.split(' ')[0] || 'Utilisateur'}
+                    </span>
                   </div>
-                </div>
+                  <Link 
+                    to="/dashboard" 
+                    className="btn btn-warning fw-bold"
+                    onClick={() => setMobileMenuOpen(false)}
+                  >
+                    <i className="bi bi-speedometer2 me-1"></i> Dashboard
+                  </Link>
+                  <button 
+                    onClick={handleLogout}
+                    className="btn btn-outline-light"
+                  >
+                    <i className="bi bi-box-arrow-right me-1"></i> Déconnexion
+                  </button>
+                </>
               ) : (
-                // Si non connecté - connexion/inscription
-                <div className="d-flex align-items-center gap-2">
+                <>
                   <Link 
                     to="/login" 
-                    className={`btn btn-outline-light ${location.pathname === '/login' ? 'active' : ''}`}
+                    className="btn btn-outline-light"
+                    onClick={() => setMobileMenuOpen(false)}
                   >
-                    Connexion
+                    <i className="bi bi-box-arrow-in-right me-1"></i> Connexion
                   </Link>
                   <Link 
                     to="/register" 
-                    className="btn btn-warning text-dark fw-bold"
+                    className="btn btn-warning fw-bold"
+                    onClick={() => setMobileMenuOpen(false)}
                   >
-                    Créer un compte
+                    <i className="bi bi-person-plus me-1"></i> S'inscrire
                   </Link>
-                </div>
+                </>
               )}
             </div>
           </div>
         </div>
       </nav>
 
-      {/* Contenu des pages */}
-      <main>
-        {children}
+      {/* Main Content */}
+      <main className="flex-grow-1">
+        <Outlet />
       </main>
 
-      {/* Footer public */}
-      <footer className="bg-dark text-white py-4 mt-5">
+      {/* FOOTER */}
+      <footer className="footer-bg text-white py-5 mt-auto">
         <div className="container">
           <div className="row">
-            <div className="col-md-6">
-              <h5>MoroccanCrypto</h5>
-              <p className="mb-0">La plateforme P2P la plus simple au Maroc</p>
+            {/* Company Info */}
+            <div className="col-lg-3 col-md-6 mb-4">
+              <div className="d-flex align-items-center mb-3">
+                <div className="bg-warning rounded p-2 me-2">
+                  <span className="text-dark fw-bold">₿</span>
+                </div>
+                <h4 className="fw-bold mb-0">CryptoMaroc</h4>
+              </div>
+              <p className="text-light-emphasis">
+                La première plateforme P2P marocaine pour échanger des cryptomonnaies en toute sécurité.
+              </p>
+              <div className="d-flex gap-2">
+                <a href="#" className="btn btn-outline-light btn-sm rounded-circle">
+                  <i className="bi bi-facebook"></i>
+                </a>
+                <a href="#" className="btn btn-outline-light btn-sm rounded-circle">
+                  <i className="bi bi-twitter"></i>
+                </a>
+                <a href="#" className="btn btn-outline-light btn-sm rounded-circle">
+                  <i className="bi bi-linkedin"></i>
+                </a>
+                <a href="#" className="btn btn-outline-light btn-sm rounded-circle">
+                  <i className="bi bi-telegram"></i>
+                </a>
+              </div>
             </div>
-            <div className="col-md-6 text-end">
-              <p className="mb-0">&copy; 2024 MoroccanCrypto. Tous droits réservés.</p>
+
+            {/* Quick Links */}
+            <div className="col-lg-3 col-md-6 mb-4">
+              <h5 className="fw-bold mb-3 text-warning">Liens Rapides</h5>
+              <ul className="list-unstyled">
+                <li className="mb-2">
+                  <Link to="/market" className="text-light-emphasis text-decoration-none">
+                    <i className="bi bi-chevron-right me-1"></i> Marketplace
+                  </Link>
+                </li>
+                <li className="mb-2">
+                  <Link to="/how-it-works" className="text-light-emphasis text-decoration-none">
+                    <i className="bi bi-chevron-right me-1"></i> Comment ça marche
+                  </Link>
+                </li>
+                <li className="mb-2">
+                  <Link to="/about" className="text-light-emphasis text-decoration-none">
+                    <i className="bi bi-chevron-right me-1"></i> À propos
+                  </Link>
+                </li>
+                <li className="mb-2">
+                  <Link to="/contact" className="text-light-emphasis text-decoration-none">
+                    <i className="bi bi-chevron-right me-1"></i> Contact
+                  </Link>
+                </li>
+              </ul>
             </div>
+
+            {/* Legal */}
+            <div className="col-lg-3 col-md-6 mb-4">
+              <h5 className="fw-bold mb-3 text-warning">Légal</h5>
+              <ul className="list-unstyled">
+                <li className="mb-2">
+                  <Link to="/privacy" className="text-light-emphasis text-decoration-none">
+                    <i className="bi bi-shield-check me-1"></i> Politique de confidentialité
+                  </Link>
+                </li>
+                <li className="mb-2">
+                  <Link to="/terms" className="text-light-emphasis text-decoration-none">
+                    <i className="bi bi-file-text me-1"></i> Conditions d'utilisation
+                  </Link>
+                </li>
+                <li className="mb-2">
+                  <Link to="/aml" className="text-light-emphasis text-decoration-none">
+                    <i className="bi bi-bank me-1"></i> Politique AML/KYC
+                  </Link>
+                </li>
+                <li className="mb-2">
+                  <Link to="/cookies" className="text-light-emphasis text-decoration-none">
+                    <i className="bi bi-cookie me-1"></i> Cookies
+                  </Link>
+                </li>
+              </ul>
+            </div>
+
+            {/* Contact */}
+            <div className="col-lg-3 col-md-6 mb-4">
+              <h5 className="fw-bold mb-3 text-warning">Contactez-nous</h5>
+              <ul className="list-unstyled text-light-emphasis">
+                <li className="mb-3">
+                  <i className="bi bi-envelope text-warning me-2"></i>
+                  support@cryptomaroc.ma
+                </li>
+                <li className="mb-3">
+                  <i className="bi bi-telephone text-warning me-2"></i>
+                  +212 522-XXXXXX
+                </li>
+                <li className="mb-3">
+                  <i className="bi bi-geo-alt text-warning me-2"></i>
+                  Casablanca, Maroc
+                </li>
+              </ul>
+              <div className="alert alert-warning mt-4">
+                <small>
+                  <i className="bi bi-exclamation-triangle me-1"></i>
+                  Les cryptomonnaies sont volatiles. Investissez avec prudence.
+                </small>
+              </div>
+            </div>
+          </div>
+
+          {/* Copyright */}
+          <div className="border-top border-secondary pt-4 mt-4 text-center">
+            <p className="mb-2">
+              &copy; {new Date().getFullYear()} CryptoMaroc P2P. Tous droits réservés.
+            </p>
+            <p className="text-light-emphasis small">
+              Service 100% Marocain 🇲🇦 • Conforme à la réglementation marocaine
+            </p>
           </div>
         </div>
       </footer>
