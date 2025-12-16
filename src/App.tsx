@@ -551,6 +551,7 @@ function App() {
           <Route path="*" element={<PublicLayout />}>
   <Route index element={<NotFound />} />
 </Route>
+          
         </Routes>
       </Router>
     </AuthProvider>
