@@ -1,4 +1,4 @@
-// src/contexts/AuthContext.tsx - VERSION COMPLÈTE CORRIGÉE
+// src/contexts/AuthContext.tsx - VERSION COMPATIBLE
 import React, { createContext, useState, useContext, useEffect, useMemo, useCallback } from 'react';
 import { 
   loginUser, 
@@ -6,12 +6,14 @@ import {
   logoutUser, 
   getCurrentUser,
   refreshCurrentUser,
-  debugAuth,
   isAuthenticated as checkAuth,
+  validateToken,
+  repairAuthState,
   autoFixUserId,
   ensureValidUserId,
   type LoginResponse,
-  type RegisterUserData 
+  type RegisterUserData,
+  UserServiceError
 } from '../api/UserService';
 import type { User } from '../types/User';
 
@@ -25,13 +27,22 @@ interface AuthContextType {
   isAdmin: boolean;
   isUser: boolean;
   loading: boolean;
+  initialized: boolean;
   login: (email: string, password: string) => Promise<void>;
   register: (userData: RegisterUserData) => Promise<void>;
-  logout: () => void;
-  checkAuthStatus: () => Promise<void>;
+  logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
-  debugAuth: () => void;
+  repairAuth: () => Promise<boolean>;
   fixUserId: () => Promise<boolean>;
+  clearAuth: () => void;
+   ensureValidUserId: () => Promise<number>; 
+}
+
+interface AuthState {
+  user: User | null;
+  loading: boolean;
+  initialized: boolean;
+  lastValidation: number;
 }
 
 // ==============================
@@ -45,288 +56,281 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 // ==============================
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [initialized, setInitialized] = useState<boolean>(false);
+  const [state, setState] = useState<AuthState>({
+    user: null,
+    loading: true,
+    initialized: false,
+    lastValidation: 0,
+  });
 
   // ==============================
   // CORE FUNCTIONS
   // ==============================
 
-  const checkAuthStatus = useCallback(async (): Promise<void> => {
+  const loadUserFromStorage = useCallback((): User | null => {
     try {
-      setLoading(true);
-      console.log('🔍 [AuthContext] Vérification DÉTAILLÉE...');
-      
-      // DEBUG: Afficher tout localStorage
-      console.log('📦 localStorage actuel:');
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        console.log(`  ${key}:`, localStorage.getItem(key!));
-      }
-      
-      const userData = getCurrentUser();
-      const isAuthValid = checkAuth();
-      
-      if (userData && isAuthValid) {
-        console.log('✅ [AuthContext] Utilisateur TROUVÉ (même ID=0):', userData.email);
-        console.log('📊 Détails:', { 
-          id: userData.id, 
-          email: userData.email,
-          roles: userData.roles 
-        });
-        
-        // Vérifier et corriger ID=0 si nécessaire
-        if (userData.id === 0) {
-          console.warn('⚠️ ID utilisateur = 0, tentative de correction...');
-          try {
-            const fixed = await autoFixUserId();
-            if (fixed) {
-              const updatedUser = getCurrentUser();
-              if (updatedUser) {
-                console.log('✅ ID corrigé:', updatedUser.id);
-                setUser(updatedUser);
-              } else {
-                setUser(userData);
-              }
-            } else {
-              console.log('⚠️ ID toujours 0, garder utilisateur quand même');
-              setUser(userData);
-            }
-          } catch (fixError) {
-            console.error('❌ Erreur correction ID:', fixError);
-            setUser(userData);
-          }
-        } else {
-          setUser(userData);
-        }
-      } else {
-        console.log('❌ [AuthContext] Aucun utilisateur trouvé');
-        console.log('🔍 Recherche manuelle...');
-        
-        // Recherche manuelle de secours
-        const manualUserStr = localStorage.getItem('user');
-        if (manualUserStr) {
-          try {
-            const manualUser = JSON.parse(manualUserStr);
-            if (manualUser && manualUser.email) {
-              console.log('🎯 Utilisateur trouvé MANUELLEMENT:', manualUser.email);
-              setUser(manualUser);
-              return;
-            }
-          } catch (e) {
-            console.error('❌ Erreur parsing manuel:', e);
-          }
-        }
-        
-        setUser(null);
-      }
-      
+      return getCurrentUser();
     } catch (error) {
-      console.error('❌ [AuthContext] Erreur vérification:', error);
-      setUser(null);
-    } finally {
-      setLoading(false);
-      setInitialized(true);
+      console.error('Erreur chargement utilisateur:', error);
+      return null;
     }
   }, []);
+
+  const validateAuthState = useCallback(async (): Promise<boolean> => {
+    try {
+      const isValid = await validateToken();
+      if (!isValid) {
+        setState(prev => ({ ...prev, user: null }));
+        return false;
+      }
+      return true;
+    } catch (error) {
+      console.error('Erreur validation auth:', error);
+      return false;
+    }
+  }, []);
+
+  const initializeAuth = useCallback(async (): Promise<void> => {
+    try {
+      const user = loadUserFromStorage();
+      if (user) {
+        const isValid = await validateAuthState();
+        if (isValid) {
+          setState(prev => ({
+            ...prev,
+            user,
+            loading: false,
+            initialized: true,
+            lastValidation: Date.now(),
+          }));
+        } else {
+          setState(prev => ({ ...prev, user: null, loading: false, initialized: true }));
+        }
+      } else {
+        setState(prev => ({ ...prev, user: null, loading: false, initialized: true }));
+      }
+    } catch (error) {
+      console.error('Erreur initialisation auth:', error);
+      setState(prev => ({ ...prev, user: null, loading: false, initialized: true }));
+    }
+  }, [loadUserFromStorage, validateAuthState]);
 
   const refreshUser = useCallback(async (): Promise<void> => {
     try {
-      console.log('🔄 [AuthContext] Rafraîchissement...');
-      
-      const userData = await refreshCurrentUser();
-      
-      if (userData) {
-        console.log('✅ Utilisateur rafraîchi:', userData.email);
-        setUser(userData);
+      setState(prev => ({ ...prev, loading: true }));
+      const refreshedUser = await refreshCurrentUser();
+      if (refreshedUser) {
+        setState(prev => ({
+          ...prev,
+          user: refreshedUser,
+          loading: false,
+          lastValidation: Date.now(),
+        }));
       } else {
-        console.warn('⚠️ Impossible de rafraîchir');
+        setState(prev => ({ ...prev, loading: false }));
       }
-      
     } catch (error) {
-      console.error('❌ Erreur rafraîchissement:', error);
+      console.error('Erreur rafraîchissement:', error);
+      setState(prev => ({ ...prev, loading: false }));
     }
   }, []);
 
-  const login = useCallback(async (email: string, password: string): Promise<void> => {
+  const repairAuth = useCallback(async (): Promise<boolean> => {
     try {
-      setLoading(true);
-      console.log('🔄 [AuthContext] Connexion démarre...', { email });
-      
-      const response: LoginResponse = await loginUser(email, password);
-      
-      console.log('🎉 [AuthContext] Connexion RÉUSSIE!');
-      console.log('📊 Détails:', {
-        email: response.user.email,
-        id: response.user.id,
-        roles: response.user.roles
-      });
-      
-      // Vérification IMMÉDIATE après connexion
-      const verifyUser = getCurrentUser();
-      console.log('🔍 Vérification post-connexion:', verifyUser ? 'OK' : 'ÉCHEC');
-      
-      setUser(response.user);
-      
-      // Si ID=0, essayer de le corriger immédiatement
-      if (response.user.id === 0) {
-        console.warn('⚠️ ID=0 après connexion, correction différée...');
-        // On corrigera plus tard dans checkAuthStatus
+      setState(prev => ({ ...prev, loading: true }));
+      const repaired = await repairAuthState();
+      if (repaired) {
+        const user = loadUserFromStorage();
+        setState(prev => ({ ...prev, user, loading: false }));
+        return true;
       }
-      
-      // Forcer une vérification après un court délai
-      setTimeout(() => {
-        checkAuthStatus();
-      }, 100);
-      
+      setState(prev => ({ ...prev, loading: false }));
+      return false;
     } catch (error) {
-      console.error('❌ [AuthContext] Erreur connexion:', error);
-      throw error;
-    } finally {
-      setLoading(false);
+      console.error('Erreur réparation:', error);
+      setState(prev => ({ ...prev, loading: false }));
+      return false;
     }
-  }, [checkAuthStatus]);
-
-  const register = useCallback(async (userData: RegisterUserData): Promise<void> => {
-    try {
-      setLoading(true);
-      console.log('📝 [AuthContext] Inscription...', { email: userData.email });
-      
-      await registerUser(userData);
-      console.log('✅ Inscription réussie');
-      
-    } catch (error) {
-      console.error('❌ Erreur inscription:', error);
-      throw error;
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const logout = useCallback((): void => {
-    console.log('👋 [AuthContext] Déconnexion demandée');
-    
-    setUser(null);
-    logoutUser();
-    
-    console.log('✅ [AuthContext] Déconnexion exécutée');
-  }, []);
-
-  const debugAuthContext = useCallback((): void => {
-    console.log('🔧 [AuthContext] Debug manuel');
-    debugAuth();
-    checkAuthStatus();
-  }, [checkAuthStatus]);
+  }, [loadUserFromStorage]);
 
   const fixUserId = useCallback(async (): Promise<boolean> => {
     try {
-      console.log('🔧 [AuthContext] Correction manuelle ID...');
       const fixed = await ensureValidUserId();
-      
       if (fixed) {
-        const updatedUser = getCurrentUser();
-        if (updatedUser) {
-          setUser(updatedUser);
-          console.log('✅ ID corrigé manuellement:', updatedUser.id);
-        }
+        const user = loadUserFromStorage();
+        setState(prev => ({ ...prev, user }));
         return true;
       }
       return false;
     } catch (error) {
-      console.error('❌ Erreur correction manuelle ID:', error);
+      console.error('Erreur fixUserId:', error);
       return false;
     }
-  }, []);
+  }, [loadUserFromStorage]);
 
   // ==============================
-  // EFFECTS
-  // ==============================
+  // AUTH OPERATIONS
+// ==============================
 
-  useEffect(() => {
-    console.log('🚀 [AuthContext] Initialisation du provider');
-    checkAuthStatus();
-  }, [checkAuthStatus]);
-
-  useEffect(() => {
-    const handleStorageChange = (event: StorageEvent) => {
-      if (event.key === 'user' || event.key === 'jwt_token' || event.key === 'current_user') {
-        console.log('🔄 Changement storage détecté:', event.key);
-        setTimeout(() => checkAuthStatus(), 100);
-      }
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-    
-    return () => {
-      window.removeEventListener('storage', handleStorageChange);
-    };
-  }, [checkAuthStatus]);
-
-  // ==============================
-  // COMPUTED VALUES
-  // ==============================
-
-  const { isAuthenticated, isAdmin, isUser } = useMemo(() => {
-    const isAuthenticated = !!user && checkAuth();
-    const isAdmin = user?.roles?.includes('ROLE_ADMIN') || false;
-    const isUser = user?.roles?.includes('ROLE_USER') || false;
-
-    if (initialized) {
-      console.log('📊 [AuthContext] État FINAL:', {
-        user: user?.email || 'null',
-        isAuthenticated,
-        isAdmin,
-        isUser,
-        loading,
-        id: user?.id
-      });
+const login = useCallback(async (email: string, password: string): Promise<void> => {
+  try {
+    setState(prev => ({ ...prev, loading: true }));
+    const response: LoginResponse = await loginUser(email, password);
+    const storedUser = getCurrentUser();
+    if (!storedUser) throw new UserServiceError('Échec sauvegarde utilisateur');
+    setState(prev => ({
+      ...prev,
+      user: response.user,
+      loading: false,
+      lastValidation: Date.now(),
+    }));
+    if (response.user.id === 0) {
+      setTimeout(() => repairAuth(), 1000);
     }
+  } catch (error) {
+    console.error('Erreur connexion:', error);
+    setState(prev => ({ ...prev, loading: false }));
+    throw error;
+  }
+}, [repairAuth]);
 
-    return { isAuthenticated, isAdmin, isUser };
-  }, [user, loading, initialized]);
+const register = useCallback(async (userData: RegisterUserData): Promise<void> => {
+  try {
+    setState(prev => ({ ...prev, loading: true }));
+    await registerUser(userData);
+    const storedUser = getCurrentUser();
+    if (storedUser) {
+      setState(prev => ({
+        ...prev,
+        user: storedUser,
+        loading: false,
+        lastValidation: Date.now(),
+      }));
+    } else {
+      setState(prev => ({ ...prev, loading: false }));
+    }
+  } catch (error) {
+    console.error('Erreur inscription:', error);
+    setState(prev => ({ ...prev, loading: false }));
+    throw error;
+  }
+}, []);
 
-  // ==============================
-  // CONTEXT VALUE
-  // ==============================
+const logout = useCallback(async (): Promise<void> => {
+  try {
+    setState(prev => ({ ...prev, loading: true }));
+    logoutUser();
+    setState(prev => ({
+      ...prev,
+      user: null,
+      loading: false,
+      lastValidation: 0,
+    }));
+  } catch (error) {
+    console.error('Erreur déconnexion:', error);
+    setState(prev => ({ ...prev, loading: false }));
+  }
+}, []);
 
-  const contextValue = useMemo((): AuthContextType => ({
-    user,
-    isAuthenticated,
-    isAdmin,
-    isUser,
-    loading,
-    login,
-    register,
-    logout,
-    checkAuthStatus,
-    refreshUser,
-    debugAuth: debugAuthContext,
-    fixUserId
-  }), [
-    user, 
-    isAuthenticated, 
-    isAdmin, 
-    isUser, 
-    loading, 
-    login, 
-    register, 
-    logout, 
-    checkAuthStatus,
-    refreshUser,
-    debugAuthContext,
-    fixUserId
-  ]);
+const clearAuth = useCallback((): void => {
+  logoutUser();
+  setState(prev => ({ ...prev, user: null, lastValidation: 0 }));
+}, []);
 
-  // ==============================
-  // RENDER
-  // ==============================
+// ==============================
+// EFFECTS
+// ==============================
 
-  return (
-    <AuthContext.Provider value={contextValue}>
-      {children}
-    </AuthContext.Provider>
-  );
+useEffect(() => {
+  initializeAuth();
+}, [initializeAuth]);
+
+useEffect(() => {
+  const interval = setInterval(async () => {
+    if (state.user && Date.now() - state.lastValidation > 300000) {
+      await validateAuthState();
+    }
+  }, 60000);
+  return () => clearInterval(interval);
+}, [state.user, state.lastValidation, validateAuthState]);
+
+useEffect(() => {
+  const handleStorageChange = (event: StorageEvent) => {
+    if (event.key?.includes('auth') || event.key?.includes('user')) {
+      setTimeout(() => initializeAuth(), 100);
+    }
+  };
+  const handleVisibilityChange = () => {
+    if (document.visibilityState === 'visible') {
+      validateAuthState();
+    }
+  };
+  window.addEventListener('storage', handleStorageChange);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  return () => {
+    window.removeEventListener('storage', handleStorageChange);
+    document.removeEventListener('visibilitychange', handleVisibilityChange);
+  };
+}, [initializeAuth, validateAuthState]);
+
+// ==============================
+// COMPUTED VALUES
+// ==============================
+
+const { isAuthenticated, isAdmin, isUser } = useMemo(() => {
+  const authCheck = checkAuth();
+  const currentUser = state.user;
+  return {
+    isAuthenticated: authCheck && !!currentUser,
+    isAdmin: currentUser?.roles?.includes('ROLE_ADMIN') || false,
+    isUser: currentUser?.roles?.includes('ROLE_USER') || false,
+  };
+}, [state.user]);
+
+// ==============================
+// CONTEXT VALUE
+// ==============================
+
+const contextValue = useMemo((): AuthContextType => ({
+  user: state.user,
+  isAuthenticated,
+  isAdmin,
+  isUser,
+  loading: state.loading,
+  initialized: state.initialized,
+  login,
+  register,
+  logout,
+  refreshUser,
+  repairAuth,
+  fixUserId,
+  clearAuth,
+  ensureValidUserId
+}), [
+  state.user,
+  state.loading,
+  state.initialized,
+  isAuthenticated,
+  isAdmin,
+  isUser,
+  login,
+  register,
+  logout,
+  refreshUser,
+  repairAuth,
+  fixUserId,
+  clearAuth,
+]);
+
+// ==============================
+// RENDER
+// ==============================
+
+return (
+  <AuthContext.Provider value={contextValue}>
+    {children}
+  </AuthContext.Provider>
+);
 };
 
 // ==============================
@@ -335,12 +339,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
 export function useAuth(): AuthContextType {
   const context = useContext(AuthContext);
-  
   if (context === undefined) {
     throw new Error('useAuth doit être utilisé dans un AuthProvider');
   }
-  
   return context;
+}
+
+// ==============================
+// UTILITY HOOKS
+// ==============================
+
+export function useAuthGuard(requiredRole?: 'admin' | 'user'): boolean {
+  const { isAuthenticated, isAdmin, isUser, loading } = useAuth();
+  if (loading) return false;
+  if (!isAuthenticated) return false;
+  if (requiredRole === 'admin' && !isAdmin) return false;
+  if (requiredRole === 'user' && !isUser) return false;
+  return true;
+}
+
+export function useRequireAuth(redirectTo: string = '/login'): void {
+  const { isAuthenticated, loading } = useAuth();
+  useEffect(() => {
+    if (!loading && !isAuthenticated && typeof window !== 'undefined') {
+      window.location.href = redirectTo;
+    }
+  }, [isAuthenticated, loading, redirectTo]);
 }
 
 // ==============================

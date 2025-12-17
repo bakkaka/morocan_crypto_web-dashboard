@@ -1,4 +1,4 @@
-// src/api/UserService.ts - VERSION COMPLÈTE CORRIGÉE
+// src/api/UserService.ts - VERSION COMPLÈTE OPTIMISÉE
 import api from './axiosConfig';
 import type { User } from '../types/User';
 
@@ -30,6 +30,12 @@ export interface UpdateUserData {
   avatarUrl?: string;
 }
 
+export interface AuthStorage {
+  user: User;
+  token: string;
+  expiresAt: number;
+}
+
 export class UserServiceError extends Error {
   public code?: string;
   public status?: number;
@@ -49,19 +55,112 @@ export class UserServiceError extends Error {
 // ==============================
 
 const STORAGE_KEYS = {
-  USER: 'current_user',
-  TOKEN: 'auth_token',
-  REFRESH_TOKEN: 'refresh_token',
-  EXPIRES_AT: 'token_expiry',
+  AUTH_DATA: 'mc_auth_data_v2',
+  LEGACY_USER: 'current_user',
+  LEGACY_TOKEN: 'auth_token',
 } as const;
 
-const AUTH_CONFIG = {
-  TOKEN_PREFIX: 'Bearer',
-  LOGIN_ENDPOINT: '/login_check',
-  ME_ENDPOINT: '/users/me',
-  LOGOUT_ENDPOINT: '/auth/logout',
-  TOKEN_TTL: 3600
+const API_ENDPOINTS = {
+  LOGIN: '/login_check',
+  REGISTER: '/users',
+  LOGOUT: '/auth/logout',
+  VALIDATE: '/auth/verify',
 } as const;
+
+const TOKEN_CONFIG = {
+  PREFIX: 'Bearer',
+  EXPIRY_BUFFER: 300000, // 5 minutes en ms
+} as const;
+
+// ==============================
+// STORAGE MANAGEMENT
+// ==============================
+
+const saveAuthToStorage = (user: User, token: string): void => {
+  try {
+    const expiresAt = Date.now() + 3600000; // 1 heure
+    
+    const authData: AuthStorage = {
+      user: {
+        ...user,
+        // Garantir que l'ID n'est jamais undefined
+        id: user.id || generateStableUserId(user.email)
+      },
+      token,
+      expiresAt
+    };
+    
+    localStorage.setItem(STORAGE_KEYS.AUTH_DATA, JSON.stringify(authData));
+    
+    // Pour compatibilité avec l'ancien code
+    localStorage.setItem(STORAGE_KEYS.LEGACY_USER, JSON.stringify(authData.user));
+    localStorage.setItem(STORAGE_KEYS.LEGACY_TOKEN, token);
+    
+    api.defaults.headers.common['Authorization'] = `${TOKEN_CONFIG.PREFIX} ${token}`;
+    
+  } catch (error) {
+    console.error('Erreur sauvegarde storage:', error);
+  }
+};
+
+const loadAuthFromStorage = (): AuthStorage | null => {
+  try {
+    // Essayer le nouveau format d'abord
+    const authDataStr = localStorage.getItem(STORAGE_KEYS.AUTH_DATA);
+    if (authDataStr) {
+      const authData: AuthStorage = JSON.parse(authDataStr);
+      
+      // Valider les données
+      if (authData.user && authData.token && authData.expiresAt) {
+        return authData;
+      }
+    }
+    
+    // Fallback: ancien format
+    const userStr = localStorage.getItem(STORAGE_KEYS.LEGACY_USER);
+    const token = localStorage.getItem(STORAGE_KEYS.LEGACY_TOKEN);
+    
+    if (userStr && token) {
+      const user: User = JSON.parse(userStr);
+      const expiresAt = Date.now() + 3600000;
+      
+      const authData: AuthStorage = { user, token, expiresAt };
+      
+      // Migrer vers le nouveau format
+      saveAuthToStorage(user, token);
+      
+      return authData;
+    }
+    
+    return null;
+    
+  } catch (error) {
+    console.error('Erreur chargement storage:', error);
+    return null;
+  }
+};
+
+export const clearAuthStorage = (): void => {
+  try {
+    // Nettoyer toutes les clés
+    Object.values(STORAGE_KEYS).forEach(key => {
+      localStorage.removeItem(key);
+    });
+    
+    // Nettoyer les anciennes clés
+    const legacyKeys = [
+      'user', 'jwt_token', 'token', 'token_expiry',
+      'refresh_token', 'auth_state'
+    ];
+    
+    legacyKeys.forEach(key => localStorage.removeItem(key));
+    
+    delete api.defaults.headers.common['Authorization'];
+    
+  } catch (error) {
+    console.error('Erreur nettoyage storage:', error);
+  }
+};
 
 // ==============================
 // JWT UTILITIES
@@ -69,160 +168,238 @@ const AUTH_CONFIG = {
 
 const decodeJWT = (token: string): any => {
   try {
-    const base64Url = token.split('.')[1];
-    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-    const jsonPayload = decodeURIComponent(
-      atob(base64)
-        .split('')
-        .map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
-        .join('')
-    );
-    return JSON.parse(jsonPayload);
+    if (!token || typeof token !== 'string') {
+      return null;
+    }
+    
+    const parts = token.split('.');
+    if (parts.length !== 3) {
+      return null;
+    }
+    
+    try {
+      const base64Url = parts[1];
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      
+      // Ajouter le padding si nécessaire
+      const padLength = 4 - (base64.length % 4);
+      const paddedBase64 = padLength < 4 ? base64 + '='.repeat(padLength) : base64;
+      
+      const jsonPayload = decodeURIComponent(
+        atob(paddedBase64)
+          .split('')
+          .map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+          .join('')
+      );
+      
+      return JSON.parse(jsonPayload);
+    } catch {
+      return null;
+    }
+    
   } catch (error) {
-    console.warn('⚠️ Erreur décodage JWT:', error);
     return null;
   }
 };
 
-const isTokenExpired = (token: string): boolean => {
+const extractInfoFromJWT = (token: string): { email: string; possibleId?: number } => {
   const payload = decodeJWT(token);
-  if (!payload || !payload.exp) return true;
   
-  const now = Math.floor(Date.now() / 1000);
-  const buffer = 60;
-  return payload.exp <= (now + buffer);
+  if (!payload) {
+    return { email: '' };
+  }
+  
+  // Extraire l'email
+  const email = payload.email || payload.username || '';
+  
+  // Chercher un ID dans le payload
+  let possibleId: number | undefined;
+  
+  // Recherche dans les clés courantes
+  const idKeys = ['id', 'userId', 'user_id', 'sub'];
+  
+  for (const key of idKeys) {
+    const value = payload[key];
+    if (value) {
+      const num = typeof value === 'string' ? parseInt(value, 10) : value;
+      if (!isNaN(num) && num > 0) {
+        possibleId = num;
+        break;
+      }
+    }
+  }
+  
+  return { email, possibleId };
+};
+
+const isTokenValid = (token: string): boolean => {
+  try {
+    const payload = decodeJWT(token);
+    if (!payload || !payload.exp) {
+      return false;
+    }
+    
+    const now = Math.floor(Date.now() / 1000);
+    return payload.exp > now;
+    
+  } catch {
+    return false;
+  }
 };
 
 // ==============================
-// STORAGE MANAGEMENT
+// USER ID GENERATION
 // ==============================
 
-const saveAuthData = (token: string, user: User): void => {
-  const payload = decodeJWT(token);
+const generateStableUserId = (email: string): number => {
+  if (!email) return 100000;
   
-  const expiresAt = payload?.exp ? payload.exp * 1000 : Date.now() + (AUTH_CONFIG.TOKEN_TTL * 1000);
+  // Hash déterministe basé sur l'email
+  let hash = 0;
+  for (let i = 0; i < email.length; i++) {
+    hash = ((hash << 5) - hash) + email.charCodeAt(i);
+    hash |= 0; // Convertir en 32-bit integer
+  }
   
-  // SAUVEGARDE DOUBLE POUR COMPATIBILITÉ
-  localStorage.setItem(STORAGE_KEYS.TOKEN, token);
-  localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
-  localStorage.setItem('jwt_token', token);
-  localStorage.setItem('user', JSON.stringify(user));
-  localStorage.setItem(STORAGE_KEYS.EXPIRES_AT, expiresAt.toString());
-  
-  // Configuration de l'API
-  api.defaults.headers.common['Authorization'] = `${AUTH_CONFIG.TOKEN_PREFIX} ${token}`;
-  
-  console.log('💾 [UserService] Authentification sauvegardée:', {
-    email: user.email,
-    id: user.id,
-    tokenLength: token.length,
-    expires: new Date(expiresAt).toLocaleTimeString()
-  });
+  // Générer un ID entre 100000 et 199999
+  return 100000 + (Math.abs(hash) % 100000);
 };
 
-export const clearAuthData = (): void => {
-  console.log('🧹 [UserService] Nettoyage des données...');
+const createUserObject = (email: string, token: string, jwtId?: number): User => {
+  const payload = decodeJWT(token);
+  const userId = jwtId || generateStableUserId(email);
   
-  // Supprimer toutes les clés possibles
-  const allKeys = [
-    STORAGE_KEYS.USER, STORAGE_KEYS.TOKEN, STORAGE_KEYS.EXPIRES_AT,
-    'user', 'jwt_token', 'token', 'auth_token', 'current_user'
+  return {
+    id: userId,
+    email: email,
+    fullName: payload?.fullName || email.split('@')[0] || 'Utilisateur',
+    roles: Array.isArray(payload?.roles) ? payload.roles : ['ROLE_USER'],
+    isVerified: payload?.isVerified || false,
+    createdAt: payload?.createdAt || new Date().toISOString(),
+    updatedAt: payload?.updatedAt || new Date().toISOString(),
+    reputation: payload?.reputation || 5.0,
+    phone: payload?.phone || '',
+    walletAddress: payload?.walletAddress || '',
+    isActive: payload?.isActive !== false,
+  };
+};
+
+// ==============================
+// API USER FETCHING
+// ==============================
+
+const tryFetchUserFromAPI = async (token: string): Promise<User | null> => {
+  const endpoints = [
+    '/api/users/me',
+    '/users/me',
+    '/auth/me',
+    '/api/auth/me',
+    '/user/profile',
   ];
   
-  allKeys.forEach(key => localStorage.removeItem(key));
+  for (const endpoint of endpoints) {
+    try {
+      console.log(`Tentative API: ${endpoint}`);
+      
+      const response = await api.get(endpoint, {
+        headers: { 'Authorization': `${TOKEN_CONFIG.PREFIX} ${token}` },
+        timeout: 10000,
+      });
+      
+      if (response.data) {
+        const apiData = response.data.user || response.data;
+        
+        if (apiData && apiData.email) {
+          // Si l'API fournit un ID valide, l'utiliser
+          if (apiData.id && apiData.id > 0) {
+            console.log(`✅ ID valide de l'API: ${apiData.id}`);
+            return {
+              ...createUserObject(apiData.email, token, apiData.id),
+              ...apiData
+            };
+          }
+          
+          // Sinon, créer un utilisateur avec les données de l'API
+          return {
+            ...createUserObject(apiData.email, token),
+            ...apiData
+          };
+        }
+      }
+    } catch (error: any) {
+      const status = error.response?.status;
+      if (status === 404 || status === 500) {
+        console.log(`Endpoint ${endpoint} non disponible (${status})`);
+        continue;
+      }
+    }
+  }
   
-  delete api.defaults.headers.common['Authorization'];
-  
-  console.log('✅ [UserService] Nettoyage terminé');
+  return null;
 };
 
 // ==============================
-// AUTHENTIFICATION
+// AUTHENTIFICATION PRINCIPALE
 // ==============================
 
 export const loginUser = async (email: string, password: string): Promise<LoginResponse> => {
   try {
-    console.log('🔐 [UserService] Connexion:', email);
+    console.log('Connexion en cours:', email);
     
-    const requestData = {
+    const credentials = {
       email: email.trim(),
-      password: password
+      password: password,
     };
     
-    console.log('📤 Envoi données login...');
+    const response = await api.post(API_ENDPOINTS.LOGIN, credentials, {
+      timeout: 15000,
+    });
     
-    const response = await api.post(AUTH_CONFIG.LOGIN_ENDPOINT, requestData);
-    const { token } = response.data;
+    const token = response.data.token;
     
     if (!token) {
       throw new UserServiceError('Token non reçu', 'NO_TOKEN', 400);
     }
     
-    console.log('✅ Token reçu:', token.substring(0, 20) + '...');
-    
-    const payload = decodeJWT(token);
-    console.log('📄 Payload JWT:', payload);
-    
-    // CRITIQUE: Vérifier que l'ID n'est pas 0 dans le JWT
-    let userId = payload?.id || payload?.user_id || 0;
-    
-    // Créer l'utilisateur avec l'ID disponible (même si 0)
-    const userFromToken: User = {
-      id: userId,
-      email: payload?.email || payload?.username || email,
-      fullName: payload?.fullName || email.split('@')[0] || 'Utilisateur',
-      roles: payload?.roles || ['ROLE_USER'],
-      isVerified: payload?.isVerified || false,
-      createdAt: payload?.createdAt || new Date().toISOString(),
-      updatedAt: payload?.updatedAt || new Date().toISOString(),
-      reputation: payload?.reputation || 5.0,
-      phone: payload?.phone || '',
-      walletAddress: payload?.walletAddress || '',
-      isActive: payload?.isActive !== false,
-    };
-    
-    console.log('👤 User créé depuis JWT:', { id: userFromToken.id, email: userFromToken.email });
-    
-    // Sauvegarder d'abord avec l'ID disponible (même 0)
-    saveAuthData(token, userFromToken);
-    
-    // FORCER l'appel à /users/me pour obtenir les données complètes
-    try {
-      const meResponse = await api.get(AUTH_CONFIG.ME_ENDPOINT);
-      console.log('📊 Réponse /users/me:', meResponse.data);
-      
-      if (meResponse.data) {
-        const apiUser = meResponse.data.user || meResponse.data;
-        
-        // Fusionner toutes les données
-        const enrichedUser = { ...userFromToken, ...apiUser };
-        
-        // Si on a un vrai ID, l'utiliser
-        if (apiUser.id && apiUser.id !== 0) {
-          enrichedUser.id = apiUser.id;
-          console.log('✅ ID définitif après /users/me:', enrichedUser.id);
-        }
-        
-        // Resauvegarder avec les données complètes
-        localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(enrichedUser));
-        localStorage.setItem('user', JSON.stringify(enrichedUser));
-        
-        console.log('✅ Données API fusionnées, ID final:', enrichedUser.id);
-        return { token, user: enrichedUser };
-      }
-    } catch (meError: any) {
-      console.warn('⚠️ /users/me échoué après login:', meError.message);
-      console.log('📦 Utilisation données JWT uniquement, ID:', userFromToken.id);
+    if (!isTokenValid(token)) {
+      throw new UserServiceError('Token invalide', 'INVALID_TOKEN', 400);
     }
     
-    return { token, user: userFromToken };
+    // Extraire les informations du JWT
+    const { email: jwtEmail, possibleId } = extractInfoFromJWT(token);
+    const userEmail = jwtEmail || email;
+    
+    // Essayer de récupérer l'utilisateur depuis l'API
+    let user = await tryFetchUserFromAPI(token);
+    
+    // Si l'API échoue, créer l'utilisateur depuis le JWT
+    if (!user) {
+      console.log('Création utilisateur depuis JWT');
+      user = createUserObject(userEmail, token, possibleId);
+    }
+    
+    // Sauvegarder
+    saveAuthToStorage(user, token);
+    
+    console.log('Connexion réussie:', {
+      id: user.id,
+      email: user.email,
+      source: user.id >= 100000 ? 'généré' : 'API/JWT'
+    });
+    
+    return { token, user };
     
   } catch (error: any) {
-    console.error('❌ Erreur connexion:', error);
-    clearAuthData();
+    console.error('Erreur connexion:', error);
+    
+    clearAuthStorage();
     
     if (error.response?.status === 401) {
-      throw new UserServiceError('Email ou mot de passe incorrect', 'INVALID_CREDENTIALS', 401);
+      throw new UserServiceError('Identifiants incorrects', 'INVALID_CREDENTIALS', 401);
+    }
+    
+    if (error.response?.status === 500) {
+      throw new UserServiceError('Erreur serveur', 'SERVER_ERROR', 500);
     }
     
     throw error;
@@ -230,325 +407,39 @@ export const loginUser = async (email: string, password: string): Promise<LoginR
 };
 
 export const logoutUser = (): void => {
-  console.log('🚪 [UserService] Déconnexion...');
-  
   try {
-    api.post(AUTH_CONFIG.LOGOUT_ENDPOINT, {}).catch(() => {});
-  } catch (error) {}
-  
-  clearAuthData();
-  
-  console.log('✅ [UserService] Déconnexion réussie');
-  
-  if (typeof window !== 'undefined') {
-    window.location.href = '/login';
+    // Tenter de notifier le serveur
+    api.post(API_ENDPOINTS.LOGOUT, {}).catch(() => {
+      // Ignorer les erreurs de déconnexion API
+    });
+  } finally {
+    clearAuthStorage();
+    
+    if (typeof window !== 'undefined') {
+      window.location.href = '/login';
+    }
   }
 };
-
-// ==============================
-// GETTERS & CHECKERS - MODIFIÉS POUR ACCEPTER ID=0
-// ==============================
-
-export const getCurrentUser = (): User | null => {
-  try {
-    console.log('🔍 [UserService] Recherche utilisateur...');
-    
-    // Chercher dans TOUTES les clés possibles
-    const possibleKeys = ['current_user', 'user', 'USER'];
-    
-    for (const key of possibleKeys) {
-      const userStr = localStorage.getItem(key);
-      if (userStr) {
-        console.log(`✅ Trouvé dans clé: "${key}"`);
-        try {
-          const user = JSON.parse(userStr);
-          
-          // MODIFICATION : ACCEPTER ID=0 TEMPORAIREMENT
-          if (user && typeof user === 'object' && (user.email || user.username)) {
-            console.log('👤 Utilisateur trouvé (ID peut être 0):', { 
-              email: user.email || user.username, 
-              id: user.id 
-            });
-            return user;
-          }
-        } catch (parseError) {
-          console.error(`❌ Erreur parsing "${key}":`, parseError);
-        }
-      }
-    }
-    
-    console.log('❌ Aucun utilisateur trouvé dans localStorage');
-    return null;
-    
-  } catch (error) {
-    console.error('❌ Erreur getCurrentUser:', error);
-    return null;
-  }
-};
-
-export const getAuthToken = (): string | null => {
-  // Chercher dans toutes les clés possibles
-  const tokenKeys = ['auth_token', 'jwt_token', 'token'];
-  
-  for (const key of tokenKeys) {
-    const token = localStorage.getItem(key);
-    if (token) {
-      return token;
-    }
-  }
-  
-  return null;
-};
-
-export const isAuthenticated = (): boolean => {
-  const token = getAuthToken();
-  const user = getCurrentUser();
-  
-  if (!token) {
-    console.log('🔐 Aucun token trouvé');
-    return false;
-  }
-  
-  if (isTokenExpired(token)) {
-    console.log('⚠️ Token expiré');
-    clearAuthData();
-    return false;
-  }
-  
-  if (!user) {
-    console.log('👤 Aucun utilisateur trouvé');
-    return false;
-  }
-  
-  // MODIFICATION : ACCEPTER ID=0 TEMPORAIREMENT
-  console.log('✅ Authentifié (même avec ID=0):', { 
-    email: user.email, 
-    id: user.id,
-    warning: user.id === 0 ? 'ID=0 - À corriger plus tard' : 'ID valide'
-  });
-  
-  return true;
-};
-
-// ==============================
-// FONCTIONS POUR GÉRER ID=0 - NOUVELLES
-// ==============================
-
-/**
- * Récupère le vrai ID utilisateur depuis l'API
- */
-export const fetchUserRealId = async (): Promise<number | null> => {
-  try {
-    console.log('🔍 [UserService] Tentative de récupération du vrai ID utilisateur...');
-    
-    const token = getAuthToken();
-    if (!token) {
-      console.log('❌ Pas de token disponible');
-      return null;
-    }
-    
-    // 1. Essayer /users/me d'abord
-    try {
-      console.log('🔄 Essai endpoint: /users/me');
-      const response = await api.get('/users/me');
-      
-      if (response.data?.id && response.data.id !== 0) {
-        console.log(`✅ Vrai ID trouvé via /users/me:`, response.data.id);
-        return response.data.id;
-      }
-      
-      if (response.data?.user?.id && response.data.user.id !== 0) {
-        console.log(`✅ Vrai ID trouvé via /users/me.user:`, response.data.user.id);
-        return response.data.user.id;
-      }
-      
-    } catch (meError: any) {
-      console.log(`❌ /users/me échoué:`, meError.message);
-    }
-    
-    // 2. Chercher l'utilisateur par email
-    const currentUser = getCurrentUser();
-    if (currentUser?.email) {
-      console.log('🔄 Tentative recherche par email:', currentUser.email);
-      try {
-        const response = await api.get(`/users?email=${encodeURIComponent(currentUser.email)}`);
-        
-        if (response.data?.['hydra:member']?.[0]?.id) {
-          const realId = response.data['hydra:member'][0].id;
-          console.log(`✅ ID trouvé via recherche email:`, realId);
-          return realId;
-        }
-        
-        if (Array.isArray(response.data) && response.data[0]?.id) {
-          const realId = response.data[0].id;
-          console.log(`✅ ID trouvé via recherche email:`, realId);
-          return realId;
-        }
-      } catch (searchError) {
-        console.log('❌ Recherche par email échouée');
-      }
-    }
-    
-    console.warn('⚠️ [UserService] Impossible de récupérer le vrai ID');
-    return null;
-    
-  } catch (error) {
-    console.error('❌ [UserService] Erreur récupération ID:', error);
-    return null;
-  }
-};
-
-/**
- * Corrige automatiquement l'ID utilisateur si = 0
- */
-export const autoFixUserId = async (): Promise<boolean> => {
-  const currentUser = getCurrentUser();
-  
-  if (currentUser && currentUser.id === 0) {
-    console.warn('⚠️ [UserService] Détection ID=0, correction automatique...');
-    const realId = await fetchUserRealId();
-    
-    if (realId) {
-      console.log('✅ [UserService] ID corrigé automatiquement:', realId);
-      
-      // Mettre à jour l'utilisateur
-      currentUser.id = realId;
-      
-      // Sauvegarder dans toutes les clés
-      localStorage.setItem('current_user', JSON.stringify(currentUser));
-      localStorage.setItem('user', JSON.stringify(currentUser));
-      
-      return true;
-    } else {
-      console.warn('⚠️ [UserService] Impossible de corriger ID=0');
-    }
-  }
-  
-  return false;
-};
-
-/**
- * Force la vérification et correction de l'ID
- */
-export const ensureValidUserId = async (): Promise<number | null> => {
-  try {
-    const currentUser = getCurrentUser();
-    
-    if (!currentUser) {
-      console.log('❌ [UserService] Aucun utilisateur pour vérification ID');
-      return null;
-    }
-    
-    // Si ID déjà valide, retourner
-    if (currentUser.id && currentUser.id !== 0) {
-      console.log('✅ [UserService] ID déjà valide:', currentUser.id);
-      return currentUser.id;
-    }
-    
-    // Sinon, essayer de corriger
-    console.log('🔄 [UserService] Vérification ID utilisateur...');
-    const fixed = await autoFixUserId();
-    
-    if (fixed) {
-      const updatedUser = getCurrentUser();
-      return updatedUser?.id || null;
-    }
-    
-    return null;
-    
-  } catch (error) {
-    console.error('❌ [UserService] Erreur vérification ID:', error);
-    return null;
-  }
-};
-
-// ==============================
-// USER REFRESH
-// ==============================
-
-export const refreshCurrentUser = async (): Promise<User | null> => {
-  try {
-    console.log('🔄 [UserService] Rafraîchissement...');
-    
-    const token = getAuthToken();
-    if (!token) {
-      console.log('❌ Aucun token');
-      return null;
-    }
-    
-    if (isTokenExpired(token)) {
-      console.log('⚠️ Token expiré');
-      clearAuthData();
-      return null;
-    }
-    
-    const response = await api.get(AUTH_CONFIG.ME_ENDPOINT);
-    
-    if (!response.data) {
-      throw new Error('Aucune donnée');
-    }
-    
-    const userData: User = response.data.user || response.data;
-    
-    if (!userData || !userData.email) {
-      throw new Error('Données invalides');
-    }
-    
-    // Sauvegarder dans toutes les clés
-    localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(userData));
-    localStorage.setItem('user', JSON.stringify(userData));
-    
-    console.log('✅ Utilisateur rafraîchi:', { email: userData.email, id: userData.id });
-    
-    return userData;
-    
-  } catch (error: any) {
-    console.error('❌ Erreur rafraîchissement:', error);
-    
-    // En cas d'erreur, garder l'utilisateur actuel
-    const currentUser = getCurrentUser();
-    if (currentUser) {
-      console.log('📦 Retour utilisateur courant');
-      return currentUser;
-    }
-    
-    return null;
-  }
-};
-
-export const refreshUserData = refreshCurrentUser;
-
-// ==============================
-// REGISTRATION
-// ==============================
-
-const validateEmail = (email: string): boolean => 
-  /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-
-const validatePhone = (phone: string): boolean => 
-  /^212\d{9}$/.test(phone);
-
-const validatePassword = (password: string): boolean => 
-  password.length >= 6;
 
 export const registerUser = async (data: RegisterUserData): Promise<User> => {
   try {
+    // Validation
     const errors: string[] = [];
     
     if (!data.fullName?.trim() || data.fullName.trim().length < 2) {
-      errors.push('Nom complet 2 caractères minimum');
+      errors.push('Nom complet requis (2 caractères minimum)');
     }
     
-    if (!validateEmail(data.email)) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email)) {
       errors.push('Email invalide');
     }
     
-    if (!validatePhone(data.phone)) {
-      errors.push('Téléphone invalide. Format: 212XXXXXXXXX');
+    if (!/^212\d{9}$/.test(data.phone)) {
+      errors.push('Téléphone invalide (format: 212XXXXXXXXX)');
     }
     
-    if (!validatePassword(data.password)) {
-      errors.push('Mot de passe 6 caractères minimum');
+    if (!data.password || data.password.length < 6) {
+      errors.push('Mot de passe requis (6 caractères minimum)');
     }
     
     if (errors.length > 0) {
@@ -563,21 +454,27 @@ export const registerUser = async (data: RegisterUserData): Promise<User> => {
       roles: ['ROLE_USER'],
       isVerified: false,
       reputation: 5.0,
-      isActive: true
+      isActive: true,
     };
     
-    const response = await api.post<User>('/users', payload);
+    const response = await api.post(API_ENDPOINTS.REGISTER, payload, {
+      timeout: 15000,
+    });
     
-    // Auto-connexion après inscription
+    console.log('Inscription réussie');
+    
+    // Auto-connexion
     try {
       await loginUser(data.email, data.password);
     } catch (loginError) {
-      console.warn('⚠️ Auto-connexion après inscription échouée');
+      console.warn('Auto-connexion après inscription échouée');
     }
     
     return response.data;
     
   } catch (error: any) {
+    console.error('Erreur inscription:', error);
+    
     if (error.response?.data?.violations) {
       const messages = error.response.data.violations
         .map((v: any) => `${v.propertyPath}: ${v.message}`)
@@ -590,41 +487,211 @@ export const registerUser = async (data: RegisterUserData): Promise<User> => {
 };
 
 // ==============================
+// STATE GETTERS
+// ==============================
+
+export const getCurrentUser = (): User | null => {
+  try {
+    const authData = loadAuthFromStorage();
+    
+    if (!authData) {
+      return null;
+    }
+    
+    // Vérifier la validité du token
+    if (!isTokenValid(authData.token)) {
+      console.log('Token expiré, nettoyage...');
+      clearAuthStorage();
+      return null;
+    }
+    
+    // Vérifier l'expiration du storage
+    if (Date.now() > authData.expiresAt) {
+      console.log('Session expirée');
+      clearAuthStorage();
+      return null;
+    }
+    
+    return authData.user;
+    
+  } catch (error) {
+    console.error('Erreur getCurrentUser:', error);
+    return null;
+  }
+};
+
+export const getAuthToken = (): string | null => {
+  try {
+    const authData = loadAuthFromStorage();
+    
+    if (!authData || !isTokenValid(authData.token)) {
+      return null;
+    }
+    
+    return authData.token;
+    
+  } catch (error) {
+    console.error('Erreur getAuthToken:', error);
+    return null;
+  }
+};
+
+export const isAuthenticated = (): boolean => {
+  try {
+    const user = getCurrentUser();
+    const token = getAuthToken();
+    
+    return !!(user && token);
+    
+  } catch (error) {
+    console.error('Erreur isAuthenticated:', error);
+    return false;
+  }
+};
+
+// ==============================
+// USER ID MANAGEMENT
+// ==============================
+
+export const ensureValidUserId = async (): Promise<number> => {
+  try {
+    const user = getCurrentUser();
+    const token = getAuthToken();
+    
+    if (!user || !token) {
+      throw new Error('Utilisateur non authentifié');
+    }
+    
+    // Si l'ID est déjà valide (pas généré)
+    if (user.id && user.id < 100000) {
+      return user.id;
+    }
+    
+    // Essayer de récupérer un ID depuis l'API
+    const apiUser = await tryFetchUserFromAPI(token);
+    
+    if (apiUser && apiUser.id && apiUser.id < 100000) {
+      // Mettre à jour le storage avec le nouvel ID
+      saveAuthToStorage(apiUser, token);
+      return apiUser.id;
+    }
+    
+    // Retourner l'ID actuel (généré)
+    return user.id;
+    
+  } catch (error) {
+    console.error('Erreur ensureValidUserId:', error);
+    
+    // En cas d'erreur, retourner un ID généré
+    const user = getCurrentUser();
+    return user?.id || generateStableUserId('unknown@email.com');
+  }
+};
+
+export const autoFixUserId = async (): Promise<boolean> => {
+  try {
+    const oldUser = getCurrentUser();
+    const newId = await ensureValidUserId();
+    
+    return oldUser?.id !== newId;
+    
+  } catch (error) {
+    console.error('Erreur autoFixUserId:', error);
+    return false;
+  }
+};
+
+// ==============================
+// USER DATA REFRESH
+// ==============================
+
+export const refreshCurrentUser = async (): Promise<User | null> => {
+  try {
+    const token = getAuthToken();
+    
+    if (!token) {
+      return null;
+    }
+    
+    const apiUser = await tryFetchUserFromAPI(token);
+    
+    if (apiUser) {
+      saveAuthToStorage(apiUser, token);
+      return apiUser;
+    }
+    
+    return getCurrentUser();
+    
+  } catch (error) {
+    console.error('Erreur refreshCurrentUser:', error);
+    return null;
+  }
+};
+
+export const refreshUserData = refreshCurrentUser;
+
+export const validateToken = async (): Promise<boolean> => {
+  try {
+    const token = getAuthToken();
+    
+    if (!token) {
+      return false;
+    }
+    
+    // Vérification locale
+    if (!isTokenValid(token)) {
+      return false;
+    }
+    
+    // Vérification serveur (optionnelle)
+    try {
+      await api.get(API_ENDPOINTS.VALIDATE, {
+        headers: { 'Authorization': `${TOKEN_CONFIG.PREFIX} ${token}` },
+        timeout: 10000,
+      });
+      return true;
+    } catch {
+      // Si le endpoint n'existe pas, on se fie à la validation locale
+      return isTokenValid(token);
+    }
+    
+  } catch (error) {
+    console.error('Erreur validateToken:', error);
+    return false;
+  }
+};
+
+// ==============================
 // USER MANAGEMENT
 // ==============================
 
 export const updateUserProfile = async (userId: number, data: UpdateUserData): Promise<User> => {
   try {
-    if (data.email && !validateEmail(data.email)) {
-      throw new UserServiceError('Email invalide', 'VALIDATION_ERROR', 400);
-    }
+    const response = await api.put(`/users/${userId}`, data);
     
-    if (data.phone && !validatePhone(data.phone)) {
-      throw new UserServiceError('Téléphone invalide', 'VALIDATION_ERROR', 400);
-    }
-    
-    const response = await api.put<User>(`/users/${userId}`, data);
-    
+    // Mettre à jour l'utilisateur courant si nécessaire
     const currentUser = getCurrentUser();
     if (currentUser?.id === userId) {
       const updatedUser = { ...currentUser, ...response.data };
-      localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(updatedUser));
-      localStorage.setItem('user', JSON.stringify(updatedUser));
+      const token = getAuthToken();
+      if (token) {
+        saveAuthToStorage(updatedUser, token);
+      }
     }
     
     return response.data;
     
   } catch (error: any) {
-    console.error(`❌ Erreur mise à jour utilisateur ${userId}:`, error);
+    console.error(`Erreur update user ${userId}:`, error);
     throw error;
   }
 };
 
 export const updateUser = updateUserProfile;
 
-export const getUsersList = async (page: number = 1, limit: number = 30): Promise<{ users: User[]; total: number }> => {
+export const getUsersList = async (page: number = 1, limit: number = 30) => {
   try {
-    const response = await api.get<any>(`/users?page=${page}&itemsPerPage=${limit}`);
+    const response = await api.get(`/users?page=${page}&itemsPerPage=${limit}`);
     
     if (response.data?.['hydra:member']) {
       return {
@@ -640,10 +707,10 @@ export const getUsersList = async (page: number = 1, limit: number = 30): Promis
       };
     }
     
-    throw new UserServiceError('Format inattendu', 'UNEXPECTED_FORMAT', 500);
+    throw new UserServiceError('Format de réponse inattendu', 'UNEXPECTED_FORMAT', 500);
     
   } catch (error: any) {
-    console.error('❌ Erreur récupération utilisateurs:', error);
+    console.error('Erreur getUsersList:', error);
     throw error;
   }
 };
@@ -652,10 +719,10 @@ export const getUsers = getUsersList;
 
 export const getUserById = async (id: number): Promise<User> => {
   try {
-    const response = await api.get<User>(`/users/${id}`);
+    const response = await api.get(`/users/${id}`);
     return response.data;
   } catch (error: any) {
-    console.error(`❌ Erreur récupération utilisateur ${id}:`, error);
+    console.error(`Erreur getUserById ${id}:`, error);
     throw error;
   }
 };
@@ -666,24 +733,24 @@ export const getUserById = async (id: number): Promise<User> => {
 
 export const promoteToAdmin = async (userId: number): Promise<User> => {
   try {
-    const response = await api.patch<User>(`/users/${userId}/promote`, {
+    const response = await api.patch(`/users/${userId}/promote`, {
       roles: ['ROLE_ADMIN', 'ROLE_USER']
     });
     return response.data;
   } catch (error: any) {
-    console.error(`❌ Erreur promotion admin ${userId}:`, error);
+    console.error(`Erreur promoteToAdmin ${userId}:`, error);
     throw error;
   }
 };
 
 export const demoteFromAdmin = async (userId: number): Promise<User> => {
   try {
-    const response = await api.patch<User>(`/users/${userId}/demote`, {
+    const response = await api.patch(`/users/${userId}/demote`, {
       roles: ['ROLE_USER']
     });
     return response.data;
   } catch (error: any) {
-    console.error(`❌ Erreur rétrogradation admin ${userId}:`, error);
+    console.error(`Erreur demoteFromAdmin ${userId}:`, error);
     throw error;
   }
 };
@@ -692,31 +759,31 @@ export const deleteUser = async (userId: number): Promise<void> => {
   try {
     await api.delete(`/users/${userId}`);
   } catch (error: any) {
-    console.error(`❌ Erreur suppression utilisateur ${userId}:`, error);
+    console.error(`Erreur deleteUser ${userId}:`, error);
     throw error;
   }
 };
 
 export const activateUser = async (userId: number): Promise<User> => {
   try {
-    const response = await api.patch<User>(`/users/${userId}/activate`, {
+    const response = await api.patch(`/users/${userId}/activate`, {
       isActive: true
     });
     return response.data;
   } catch (error: any) {
-    console.error(`❌ Erreur activation utilisateur ${userId}:`, error);
+    console.error(`Erreur activateUser ${userId}:`, error);
     throw error;
   }
 };
 
 export const deactivateUser = async (userId: number): Promise<User> => {
   try {
-    const response = await api.patch<User>(`/users/${userId}/deactivate`, {
+    const response = await api.patch(`/users/${userId}/deactivate`, {
       isActive: false
     });
     return response.data;
   } catch (error: any) {
-    console.error(`❌ Erreur désactivation utilisateur ${userId}:`, error);
+    console.error(`Erreur deactivateUser ${userId}:`, error);
     throw error;
   }
 };
@@ -725,59 +792,85 @@ export const deactivateUser = async (userId: number): Promise<User> => {
 // UTILITIES
 // ==============================
 
-export const testAPIConnection = async (): Promise<{ 
-  connected: boolean; 
-  message: string;
-  responseTime?: number;
-}> => {
+export const testAPIConnection = async () => {
   const startTime = Date.now();
   
   try {
-    await api.get('/', { 
-      timeout: 8000,
-      headers: { 'Cache-Control': 'no-cache' }
-    });
-    
-    const responseTime = Date.now() - startTime;
+    await api.get('/', { timeout: 8000 });
     
     return {
       connected: true,
-      message: `API accessible`,
-      responseTime
+      message: `API accessible (${Date.now() - startTime}ms)`
     };
     
   } catch (error: any) {
     return {
       connected: false,
-      message: `API inaccessible: ${error.message}`,
-      responseTime: Date.now() - startTime
+      message: `Erreur: ${error.message}`
     };
   }
 };
 
 export const debugAuth = (): void => {
-  console.group('🔍 [UserService] DEBUG COMPLET');
+  console.group('🔍 DEBUG AUTH');
   
-  console.log('=== LOCALSTORAGE ===');
+  console.log('=== STORAGE ===');
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
-    console.log(`${key}:`, localStorage.getItem(key!));
+    if (key?.includes('auth') || key?.includes('user') || key?.includes('token')) {
+      console.log(`${key}:`, localStorage.getItem(key));
+    }
   }
   
-  console.log('=== AUTH STATE ===');
-  console.log('Token:', getAuthToken() ? 'PRÉSENT' : 'ABSENT');
-  console.log('Utilisateur:', getCurrentUser());
+  console.log('=== CURRENT STATE ===');
+  console.log('User:', getCurrentUser());
+  console.log('Token présent:', !!getAuthToken());
   console.log('Authentifié:', isAuthenticated());
+  
+  const token = getAuthToken();
+  if (token) {
+    console.log('=== TOKEN INFO ===');
+    const payload = decodeJWT(token);
+    console.log('Payload:', payload);
+    console.log('Valide:', isTokenValid(token));
+  }
   
   console.groupEnd();
 };
 
 export const forceLogout = (): void => {
-  console.log('🚨 Déconnexion forcée');
-  clearAuthData();
+  console.log('Déconnexion forcée');
+  clearAuthStorage();
   
   if (typeof window !== 'undefined') {
     window.location.href = '/login';
+  }
+};
+
+export const repairAuthState = async (): Promise<boolean> => {
+  try {
+    const user = getCurrentUser();
+    const token = getAuthToken();
+    
+    if (!user || !token) {
+      return false;
+    }
+    
+    // Si l'ID est généré (>100000), essayer de le corriger
+    if (user.id >= 100000) {
+      const apiUser = await tryFetchUserFromAPI(token);
+      
+      if (apiUser && apiUser.id && apiUser.id < 100000) {
+        saveAuthToStorage(apiUser, token);
+        return true;
+      }
+    }
+    
+    return false;
+    
+  } catch (error) {
+    console.error('Erreur repairAuthState:', error);
+    return false;
   }
 };
 
@@ -795,11 +888,11 @@ const UserService = {
   getAuthToken,
   refreshCurrentUser,
   refreshUserData,
+  validateToken,
   
-  // ID Correction
-  fetchUserRealId,
-  autoFixUserId,
+  // ID Management
   ensureValidUserId,
+  autoFixUserId,
   
   // User Management
   updateUserProfile,
@@ -808,7 +901,7 @@ const UserService = {
   getUsers,
   getUserById,
   
-  // Admin Functions
+  // Admin
   promoteToAdmin,
   demoteFromAdmin,
   deleteUser,
@@ -819,8 +912,11 @@ const UserService = {
   testAPIConnection,
   debugAuth,
   forceLogout,
-  clearAuthData,
-  UserServiceError
+  clearAuthStorage,
+  repairAuthState,
+  
+  // Error Class
+  UserServiceError,
 };
 
 export default UserService;
