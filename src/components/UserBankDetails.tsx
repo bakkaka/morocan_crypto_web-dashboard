@@ -1,9 +1,9 @@
-// src/components/UserBankDetails.tsx - VERSION COMPLÈTE CORRIGÉE
+// src/components/UserBankDetails.tsx - VERSION CORRIGÉE COMPLÈTE
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../api/axiosConfig';
-import { fetchUserRealId, ensureValidUserId } from '../api/UserService';
+import { getCurrentUser } from '../api/UserService';
 
 // ==============================
 // TYPES
@@ -48,8 +48,52 @@ interface BankFormData {
 // UTILITY FUNCTIONS
 // ==============================
 
+// Fonction pour vérifier et obtenir l'ID utilisateur
+const ensureValidUserId = async (): Promise<number | null> => {
+  try {
+    const user = getCurrentUser();
+    
+    if (!user) {
+      console.log('❌ Aucun utilisateur trouvé');
+      return null;
+    }
+    
+    // Si ID déjà valide
+    if (user.id && user.id !== 0) {
+      console.log('✅ ID déjà valide:', user.id);
+      return user.id;
+    }
+    
+    console.log('⚠️ ID utilisateur = 0, tentative de récupération...');
+    
+    // Essayer de récupérer via /users/me
+    try {
+      const token = getAuthToken();
+      if (token) {
+        const response = await api.get('/users/me');
+        if (response.data?.id && response.data.id !== 0) {
+          console.log('✅ ID récupéré via /users/me:', response.data.id);
+          return response.data.id;
+        }
+      }
+    } catch (error) {
+      console.log('❌ Impossible de récupérer ID via /users/me');
+    }
+    
+    return null;
+    
+  } catch (error) {
+    console.error('❌ Erreur vérification ID:', error);
+    return null;
+  }
+};
+
+// Fonction pour récupérer le vrai ID
+const fetchUserRealId = async (): Promise<number | null> => {
+  return await ensureValidUserId();
+};
+
 const isValidUserId = (id: any): boolean => {
-  // Accepte ID=0 temporairement
   return id !== undefined && id !== null && !isNaN(Number(id));
 };
 
@@ -159,7 +203,7 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
   // HOOKS & STATE
   // ==============================
   const navigate = useNavigate();
-  const { user, isAuthenticated, refreshUser, fixUserId } = useAuth();
+  const { user, isAuthenticated, checkAuthStatus } = useAuth();
   
   const [loading, setLoading] = useState<boolean>(false);
   const [dataLoading, setDataLoading] = useState<boolean>(true);
@@ -239,10 +283,10 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
       if (forceRefresh && user) {
         console.log('🔄 Rafraîchissement utilisateur demandé...');
         try {
-          await refreshUser();
-          console.log('✅ Utilisateur rafraîchi');
+          await checkAuthStatus();
+          console.log('✅ État auth vérifié');
         } catch (refreshError) {
-          console.warn('⚠️ Erreur rafraîchissement utilisateur:', refreshError);
+          console.warn('⚠️ Erreur vérification auth:', refreshError);
         }
       }
       
@@ -270,7 +314,7 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
     } finally {
       setDataLoading(false);
     }
-  }, [adminView, extractHydraMember, navigate, refreshUser, user]);
+  }, [adminView, extractHydraMember, navigate, checkAuthStatus, user]);
 
   // ==============================
   // AUTHENTICATION CHECK
@@ -635,12 +679,19 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
             className="btn btn-outline-warning btn-sm"
             onClick={async () => {
               console.log('🔧 Correction manuelle ID...');
-              const fixed = await fixUserId();
-              if (fixed) {
-                alert('✅ ID corrigé ! Rafraîchissement...');
-                window.location.reload();
+              const currentUser = getCurrentUser();
+              if (currentUser && currentUser.id === 0) {
+                const realId = await ensureValidUserId();
+                if (realId) {
+                  currentUser.id = realId;
+                  localStorage.setItem('current_user', JSON.stringify(currentUser));
+                  alert('✅ ID corrigé ! Rafraîchissement...');
+                  window.location.reload();
+                } else {
+                  alert('❌ Impossible de corriger ID');
+                }
               } else {
-                alert('❌ Impossible de corriger ID');
+                alert('✅ ID déjà valide');
               }
             }}
             title="Corriger ID"
@@ -692,8 +743,15 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
           <button 
             className="btn btn-sm btn-warning ms-2"
             onClick={async () => {
-              const fixed = await fixUserId();
-              if (fixed) window.location.reload();
+              const currentUser = getCurrentUser();
+              if (currentUser && currentUser.id === 0) {
+                const realId = await ensureValidUserId();
+                if (realId) {
+                  currentUser.id = realId;
+                  localStorage.setItem('current_user', JSON.stringify(currentUser));
+                  window.location.reload();
+                }
+              }
             }}
           >
             Corriger l'ID
@@ -727,8 +785,15 @@ const UserBankDetails: React.FC<UserBankDetailsProps> = ({ adminView = false }) 
                       <button 
                         className="btn btn-sm btn-warning"
                         onClick={async () => {
-                          const fixed = await fixUserId();
-                          if (fixed) window.location.reload();
+                          const currentUser = getCurrentUser();
+                          if (currentUser && currentUser.id === 0) {
+                            const realId = await ensureValidUserId();
+                            if (realId) {
+                              currentUser.id = realId;
+                              localStorage.setItem('current_user', JSON.stringify(currentUser));
+                              window.location.reload();
+                            }
+                          }
                         }}
                       >
                         <i className="bi bi-wrench me-1"></i>

@@ -1,4 +1,4 @@
-// src/api/axiosConfig.ts - VERSION SANS DUPLICATION
+// src/api/axiosConfig.ts - VERSION CORRIGÉE API PLATFORM
 import axios from 'axios';
 import { clearAuthData } from './UserService';
 
@@ -7,13 +7,16 @@ import { clearAuthData } from './UserService';
 // ==============================
 
 // URL de l'API - Production vs Développement
-const API_URL = import.meta.env.VITE_API_URL || 'https://morocancryptobackend-production-f3b6.up.railway.app/api';
+const API_URL =
+  import.meta.env.VITE_API_URL ||
+  'https://morocancryptobackend-production-f3b6.up.railway.app/api';
 
 // Vérification environnement
-const IS_DEV = typeof window !== 'undefined' && 
-  (window.location.hostname === 'localhost' || 
-   window.location.hostname === '127.0.0.1' ||
-   window.location.hostname.includes('local'));
+const IS_DEV =
+  typeof window !== 'undefined' &&
+  (window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1' ||
+    window.location.hostname.includes('local'));
 
 // ==============================
 // CONFIGURATION AXIOS
@@ -23,8 +26,9 @@ const api = axios.create({
   baseURL: API_URL,
   timeout: 30000,
   headers: {
-    'Accept': 'application/ld+json', // ⭐ CRITIQUE : Format ApiPlatform
-  },
+    Accept: 'application/ld+json',        // ✅ OBLIGATOIRE API PLATFORM
+    'Content-Type': 'application/ld+json' // ✅ OBLIGATOIRE API PLATFORM
+  }
 });
 
 // ==============================
@@ -36,13 +40,12 @@ const api = axios.create({
  */
 const getAuthToken = (): string | null => {
   const tokenKeys = ['auth_token', 'jwt_token', 'token'];
-  
+
   for (const key of tokenKeys) {
     const token = localStorage.getItem(key);
-    if (token) {
-      return token;
-    }
+    if (token) return token;
   }
+
   return null;
 };
 
@@ -53,22 +56,26 @@ const getAuthToken = (): string | null => {
 api.interceptors.request.use(
   (config) => {
     const token = getAuthToken();
-    
-    // Ajouter le token d'authentification
+
+    // 🔐 Ajouter le token JWT
     if (token) {
-      const cleanToken = token.startsWith('Bearer ') ? token.substring(7) : token;
+      const cleanToken = token.startsWith('Bearer ')
+        ? token.slice(7)
+        : token;
+
       config.headers.Authorization = `Bearer ${cleanToken}`;
-      
+
       if (IS_DEV) {
-        console.log(`🔑 Token ajouté pour ${config.method?.toUpperCase()} ${config.url}`);
+        console.log(
+          `🔑 Token ajouté pour ${config.method?.toUpperCase()} ${config.url}`
+        );
       }
     }
-    
-    // Ajouter Content-Type pour les requêtes avec corps
-    if (['post', 'put', 'patch'].includes(config.method?.toLowerCase() || '')) {
-      config.headers['Content-Type'] = 'application/json';
-    }
-    
+
+    // ✅ TOUJOURS API PLATFORM (NE PAS METTRE application/json)
+    config.headers.Accept = 'application/ld+json';
+    config.headers['Content-Type'] = 'application/ld+json';
+
     return config;
   },
   (error) => {
@@ -86,19 +93,20 @@ api.interceptors.response.use(
     // Sauvegarder nouveau token si présent
     if (response.data?.token) {
       localStorage.setItem('auth_token', response.data.token);
-      api.defaults.headers.common['Authorization'] = `Bearer ${response.data.token}`;
+      api.defaults.headers.common.Authorization = `Bearer ${response.data.token}`;
     }
-    
+
     return response;
   },
   async (error) => {
     const { config, response } = error;
     const url = config?.url;
     const status = response?.status;
-    
-    // Gestion spécifique pour /users/me 500
+
+    // 🛠️ Correction fallback /users/me (500)
     if (url?.includes('/users/me') && status === 500) {
       const userKeys = ['user', 'current_user'];
+
       for (const key of userKeys) {
         try {
           const stored = localStorage.getItem(key);
@@ -114,22 +122,28 @@ api.interceptors.response.use(
               });
             }
           }
-        } catch (e) {
+        } catch {
           continue;
         }
       }
     }
-    
-    // Gestion erreur 401
+
+    // 🔒 Gestion 401 (token invalide)
     if (status === 401 && !url?.includes('/users/me')) {
       clearAuthData();
-      if (typeof window !== 'undefined' && !window.location.pathname.includes('/login')) {
+
+      if (
+        typeof window !== 'undefined' &&
+        !window.location.pathname.includes('/login')
+      ) {
         setTimeout(() => {
-          window.location.href = `/login?redirect=${encodeURIComponent(window.location.pathname)}`;
+          window.location.href = `/login?redirect=${encodeURIComponent(
+            window.location.pathname
+          )}`;
         }, 1000);
       }
     }
-    
+
     return Promise.reject(error);
   }
 );
@@ -155,7 +169,7 @@ export const testConnection = async (): Promise<boolean> => {
  */
 export const getApiStatus = async () => {
   const start = Date.now();
-  
+
   try {
     const response = await api.get('/currencies', { timeout: 10000 });
     return {
@@ -193,11 +207,11 @@ export const debugAuth = (): void => {
  */
 export const updateToken = (token: string): void => {
   localStorage.setItem('auth_token', token);
-  api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+  api.defaults.headers.common.Authorization = `Bearer ${token}`;
 };
 
 // ==============================
-// EXPORT PAR DÉFAUT
+// EXPORTS
 // ==============================
 
 export default api;
