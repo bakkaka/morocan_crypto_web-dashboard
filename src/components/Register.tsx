@@ -1,258 +1,397 @@
-// src/pages/Register.tsx
+// src/components/Register.tsx - VERSION COMPLÈTE ET OPTIMISÉE
 import React, { useState, useEffect } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { registerUser, UserServiceError } from '../api/UserService';
-import type { RegisterUserData } from '../api/UserService';
+import { Link, useNavigate } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
+import UserService from '../api/UserService';
 
 const Register: React.FC = () => {
   const navigate = useNavigate();
-
+  const { user } = useAuth();
+  
   // États du formulaire
-  const [formData, setFormData] = useState<RegisterUserData>({
-    fullName: '',
-    email: '',
-    phone: '',
-    password: '', // correspond à plainPassword dans UserService.ts
-  });
-
-  // États de l'interface
-  const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const [fullName, setFullName] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('212');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  
+  // États UI
   const [loading, setLoading] = useState(false);
-  const [apiStatus, setApiStatus] = useState<{ connected: boolean; message: string } | null>(null);
-
-  // Test de connexion API au chargement
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [phoneError, setPhoneError] = useState<string | null>(null);
+  
+  // Redirection si déjà connecté
   useEffect(() => {
-    const checkAPI = async () => {
-      try {
-        // Même test que dans Login.tsx
-        const response = await fetch('https://morocancryptobackend-production-f3b6.up.railway.app/api');
-        setApiStatus({ 
-          connected: response.ok, 
-          message: response.ok ? 'Serveur OK' : 'Serveur erreur' 
-        });
-      } catch (error) {
-        setApiStatus({ connected: false, message: 'Serveur non accessible' });
-      }
-    };
-    checkAPI();
-  }, []);
+    if (user) {
+      navigate('/dashboard');
+    }
+  }, [user, navigate]);
 
-  // Gestion des changements de champs
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { id, value } = e.target;
-    setFormData(prev => ({ ...prev, [id]: value }));
-    if (message) setMessage(null);
+  // Validation du téléphone en temps réel
+  useEffect(() => {
+    if (!phone) {
+      setPhoneError(null);
+      return;
+    }
+
+    // Nettoyer le numéro (enlever + et espaces)
+    const cleanedPhone = phone.replace(/[+\s]/g, '');
+    
+    // Validation format 212XXXXXXXXX
+    const phoneRegex = /^212\d{9}$/;
+    
+    if (!phoneRegex.test(cleanedPhone)) {
+      setPhoneError('Format invalide. Doit être: 212XXXXXXXXX (12 chiffres)');
+    } else {
+      setPhoneError(null);
+    }
+  }, [phone]);
+
+  // Gestion du changement de téléphone
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    let value = e.target.value;
+    
+    // Retirer tout ce qui n'est pas chiffre
+    value = value.replace(/\D/g, '');
+    
+    // S'assurer que ça commence par 212
+    if (!value.startsWith('212')) {
+      value = '212' + value.replace(/^212/, '');
+    }
+    
+    // Limiter à 12 chiffres (212 + 9 chiffres)
+    if (value.length > 12) {
+      value = value.slice(0, 12);
+    }
+    
+    setPhone(value);
   };
 
-  // Vérification si le bouton doit être désactivé
-  const isSubmitDisabled = loading || (apiStatus !== null && !apiStatus.connected);
+  // Validation du formulaire
+  const validateForm = (): string[] => {
+    const errors: string[] = [];
+
+    // Nom complet
+    if (!fullName.trim() || fullName.trim().length < 2) {
+      errors.push('Nom complet requis (minimum 2 caractères)');
+    }
+
+    // Email
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email.trim())) {
+      errors.push('Adresse email invalide');
+    }
+
+    // Téléphone
+    const phoneRegex = /^212\d{9}$/;
+    const cleanedPhone = phone.replace(/[+\s]/g, '');
+    if (!phoneRegex.test(cleanedPhone)) {
+      errors.push('Téléphone invalide. Format: 212XXXXXXXXX (12 chiffres)');
+    }
+
+    // Mot de passe
+    if (password.length < 6) {
+      errors.push('Le mot de passe doit contenir au moins 6 caractères');
+    }
+
+    // Confirmation mot de passe
+    if (password !== confirmPassword) {
+      errors.push('Les mots de passe ne correspondent pas');
+    }
+
+    return errors;
+  };
 
   // Soumission du formulaire
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (apiStatus && !apiStatus.connected) {
-      setMessage({
-        text: '❌ Impossible de se connecter au serveur. Vérifiez que le backend est démarré.',
-        type: 'error',
-      });
-      return;
-    }
-
     setLoading(true);
-    setMessage(null);
+    setError(null);
+    setSuccess(null);
 
     try {
-      console.log('🔄 Tentative d\'inscription...', formData);
-
-      // Appel au service
-      await registerUser(formData);
-
-      setMessage({
-        text: '✅ Inscription réussie ! Redirection vers la connexion...',
-        type: 'success',
-      });
-
-      // Réinitialiser le formulaire
-      setFormData({ fullName: '', email: '', phone: '', password: '' });
-
-      // Redirection après 2 secondes
-      setTimeout(() => navigate('/login'), 2000);
-
-    } catch (error: any) {
-      console.error('💥 Erreur inscription:', error);
-
-      let errorMessage = 'Erreur lors de l\'inscription';
-
-      if (error instanceof UserServiceError) {
-        errorMessage = error.message;
-      } else if (error.response?.data?.['hydra:description']) {
-        errorMessage = error.response.data['hydra:description'];
-      } else if (error.response?.data?.message) {
-        errorMessage = error.response.data.message;
-      } else if (error.code === 'ERR_NETWORK') {
-        errorMessage = 'Impossible de se connecter au serveur. Vérifiez votre connexion.';
-      } else if (error.code === 'ECONNABORTED') {
-        errorMessage = 'La requête a expiré. Veuillez réessayer.';
+      // Validation client-side
+      const validationErrors = validateForm();
+      if (validationErrors.length > 0) {
+        throw new Error(validationErrors.join('. '));
       }
 
-      setMessage({ text: `❌ ${errorMessage}`, type: 'error' });
+      // Préparer les données
+      const userData = {
+        fullName: fullName.trim(),
+        email: email.trim().toLowerCase(),
+        phone: phone.trim(), // Déjà au format 212XXXXXXXXX
+        password: password
+      };
+
+      console.log('📤 Tentative d\'inscription:', userData);
+
+      // Appel API via UserService
+      await UserService.registerUser(userData);
+
+      console.log('✅ Inscription réussie');
+      setSuccess('Inscription réussie ! Redirection vers la connexion...');
+
+      // Redirection après 2 secondes
+      setTimeout(() => {
+        navigate('/login');
+      }, 2000);
+
+    } catch (err: any) {
+      console.error('❌ Erreur inscription:', err);
+      
+      // Gestion des erreurs spécifiques
+      if (err.code === 'EMAIL_EXISTS') {
+        setError('Cet email est déjà utilisé. Veuillez en choisir un autre.');
+      } else if (err.code === 'VALIDATION_ERROR') {
+        setError(err.message);
+      } else if (err.message.includes('déjà utilisé')) {
+        setError('Cet email ou numéro de téléphone est déjà utilisé.');
+      } else {
+        setError(err.message || 'Une erreur est survenue lors de l\'inscription');
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  const getAlertClass = (type: string) => {
-    switch (type) {
-      case 'success': return 'alert-success';
-      case 'error': return 'alert-danger';
-      case 'info': return 'alert-info';
-      default: return 'alert-info';
-    }
+  // Fonction pour formater l'affichage du téléphone
+  const formatPhoneDisplay = (value: string): string => {
+    if (value.length <= 3) return value;
+    return `+${value.slice(0, 3)} ${value.slice(3, 6)} ${value.slice(6, 9)} ${value.slice(9)}`;
   };
 
   return (
-    <div className="container mt-5">
+    <div className="container py-5">
       <div className="row justify-content-center">
-        <div className="col-md-6">
-          <div className="card shadow-lg">
-            <div className="card-header bg-primary text-white">
-              <h2 className="card-title text-center mb-0">Créer un compte</h2>
-            </div>
-            <div className="card-body p-4">
-
-              {/* Statut API */}
-              {apiStatus && (
-                <div className={`alert ${apiStatus.connected ? 'alert-success' : 'alert-warning'} mb-4`}>
-                  <small>
-                    <strong>Statut serveur:</strong> {apiStatus.message}
-                    {!apiStatus.connected && (
-                      <div>
-                        <small>Connexion au serveur distant Railway...</small>
-                      </div>
-                    )}
-                  </small>
-                </div>
-              )}
-
-              {/* Message de résultat */}
-              {message && (
-                <div className={`alert ${getAlertClass(message.type)} alert-dismissible fade show`}>
-                  <div className="d-flex align-items-center">
-                    <span className="me-2">{message.text.includes('✅') ? '✅' : '❌'}</span>
-                    <span>{message.text.replace('✅', '').replace('❌', '')}</span>
-                  </div>
-                  <button 
-                    type="button" 
-                    className="btn-close" 
-                    onClick={() => setMessage(null)}
-                    aria-label="Close"
-                  ></button>
-                </div>
-              )}
-
-              <form onSubmit={handleSubmit} noValidate>
+        <div className="col-md-8 col-lg-6">
+          <div className="card shadow-sm border-0">
+            <div className="card-body p-4 p-md-5">
+              {/* En-tête */}
+              <div className="text-center mb-4">
                 <div className="mb-3">
-                  <label htmlFor="fullName" className="form-label">
-                    Nom complet <span className="text-danger">*</span>
+                  <i className="bi bi-person-plus-fill text-primary fs-1"></i>
+                </div>
+                <h1 className="h2 fw-bold text-primary mb-2">
+                  Créer un compte
+                </h1>
+                <p className="text-muted">
+                  Rejoignez la plateforme de trading P2P sécurisée
+                </p>
+              </div>
+
+              {/* Messages d'état */}
+              {error && (
+                <div className="alert alert-danger alert-dismissible fade show" role="alert">
+                  <div className="d-flex align-items-center">
+                    <i className="bi bi-exclamation-triangle-fill me-2"></i>
+                    <div className="flex-grow-1">{error}</div>
+                    <button 
+                      type="button" 
+                      className="btn-close" 
+                      onClick={() => setError(null)}
+                      aria-label="Close"
+                    ></button>
+                  </div>
+                </div>
+              )}
+
+              {success && (
+                <div className="alert alert-success alert-dismissible fade show" role="alert">
+                  <div className="d-flex align-items-center">
+                    <i className="bi bi-check-circle-fill me-2"></i>
+                    <div className="flex-grow-1">{success}</div>
+                  </div>
+                </div>
+              )}
+
+              {/* Formulaire */}
+              <form onSubmit={handleSubmit} noValidate>
+                {/* Nom complet */}
+                <div className="mb-4">
+                  <label htmlFor="fullName" className="form-label fw-semibold">
+                    <i className="bi bi-person me-1 text-primary"></i>
+                    Nom complet *
                   </label>
                   <input
                     type="text"
                     id="fullName"
-                    className="form-control"
-                    value={formData.fullName}
-                    onChange={handleInputChange}
+                    className="form-control form-control-lg"
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    placeholder="Votre nom complet"
                     required
                     disabled={loading}
                     minLength={2}
-                    placeholder="Votre nom complet"
                   />
                   <div className="form-text">Minimum 2 caractères</div>
                 </div>
 
-                <div className="mb-3">
-                  <label htmlFor="email" className="form-label">
-                    Email <span className="text-danger">*</span>
+                {/* Email */}
+                <div className="mb-4">
+                  <label htmlFor="email" className="form-label fw-semibold">
+                    <i className="bi bi-envelope me-1 text-primary"></i>
+                    Adresse email *
                   </label>
                   <input
                     type="email"
                     id="email"
-                    className="form-control"
-                    value={formData.email}
-                    onChange={handleInputChange}
+                    className="form-control form-control-lg"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="votre@email.com"
                     required
                     disabled={loading}
-                    placeholder="exemple@email.com"
                   />
+                  <div className="form-text">Nous ne partagerons jamais votre email</div>
                 </div>
 
-                <div className="mb-3">
-                  <label htmlFor="phone" className="form-label">
-                    Téléphone <span className="text-danger">*</span>
-                  </label>
-                  <input
-                    type="tel"
-                    id="phone"
-                    className="form-control"
-                    value={formData.phone}
-                    onChange={handleInputChange}
-                    required
-                    disabled={loading}
-                    placeholder="+33 6 12 34 56 78"
-                  />
-                </div>
-
+                {/* Téléphone */}
                 <div className="mb-4">
-                  <label htmlFor="password" className="form-label">
-                    Mot de passe <span className="text-danger">*</span>
+                  <label htmlFor="phone" className="form-label fw-semibold">
+                    <i className="bi bi-phone me-1 text-primary"></i>
+                    Téléphone (Maroc) *
+                  </label>
+                  <div className="input-group input-group-lg">
+                    <span className="input-group-text bg-light">
+                      <span className="text-muted">+212</span>
+                    </span>
+                    <input
+                      type="tel"
+                      id="phone"
+                      className={`form-control ${phoneError ? 'is-invalid' : ''}`}
+                      value={phone}
+                      onChange={handlePhoneChange}
+                      placeholder="671486449"
+                      required
+                      disabled={loading}
+                      maxLength={12}
+                    />
+                  </div>
+                  {phoneError ? (
+                    <div className="invalid-feedback d-block">{phoneError}</div>
+                  ) : (
+                    <div className="form-text">
+                      {phone ? `Format: ${formatPhoneDisplay(phone)}` : 'Format: 212XXXXXXXXX'}
+                    </div>
+                  )}
+                </div>
+
+                {/* Mot de passe */}
+                <div className="mb-4">
+                  <label htmlFor="password" className="form-label fw-semibold">
+                    <i className="bi bi-lock me-1 text-primary"></i>
+                    Mot de passe *
                   </label>
                   <input
                     type="password"
                     id="password"
-                    className="form-control"
-                    value={formData.password}
-                    onChange={handleInputChange}
+                    className="form-control form-control-lg"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
                     required
                     disabled={loading}
                     minLength={6}
-                    placeholder="Minimum 6 caractères"
                   />
-                  <div className="form-text">Au moins 6 caractères</div>
+                  <div className="form-text">Minimum 6 caractères</div>
                 </div>
 
-                <button
-                  type="submit"
-                  className="btn btn-primary w-100 py-2 fw-bold"
-                  disabled={isSubmitDisabled}
-                >
-                  {loading ? (
-                    <>
-                      <span className="spinner-border spinner-border-sm me-2" role="status"></span>
-                      Création en cours...
-                    </>
-                  ) : 'Créer mon compte'}
-                </button>
+                {/* Confirmation mot de passe */}
+                <div className="mb-4">
+                  <label htmlFor="confirmPassword" className="form-label fw-semibold">
+                    <i className="bi bi-lock-fill me-1 text-primary"></i>
+                    Confirmer le mot de passe *
+                  </label>
+                  <input
+                    type="password"
+                    id="confirmPassword"
+                    className="form-control form-control-lg"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="••••••••"
+                    required
+                    disabled={loading}
+                    minLength={6}
+                  />
+                  {password && confirmPassword && password !== confirmPassword && (
+                    <div className="text-danger small mt-1">
+                      <i className="bi bi-exclamation-circle me-1"></i>
+                      Les mots de passe ne correspondent pas
+                    </div>
+                  )}
+                </div>
+
+                {/* Bouton d'inscription */}
+                <div className="d-grid gap-2 mb-4">
+                  <button
+                    type="submit"
+                    className="btn btn-primary btn-lg py-3 fw-semibold"
+                    disabled={loading || !!phoneError}
+                  >
+                    {loading ? (
+                      <>
+                        <span className="spinner-border spinner-border-sm me-2" role="status"></span>
+                        Inscription en cours...
+                      </>
+                    ) : (
+                      <>
+                        <i className="bi bi-person-plus me-2"></i>
+                        Créer mon compte
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Lien vers connexion */}
+                <div className="text-center pt-3 border-top">
+                  <p className="text-muted mb-0">
+                    Déjà un compte ?{' '}
+                    <Link 
+                      to="/login" 
+                      className="fw-semibold text-decoration-none text-primary"
+                    >
+                      <i className="bi bi-box-arrow-in-right me-1"></i>
+                      Se connecter
+                    </Link>
+                  </p>
+                </div>
               </form>
 
-              <div className="text-center mt-4">
-                <p className="mb-2">
-                  Déjà un compte ? <Link to="/login" className="fw-bold text-primary">Connectez-vous</Link>
-                </p>
-                <p className="mb-0">
-                  <Link to="/" className="text-muted text-decoration-none">← Retour à l'accueil</Link>
-                </p>
+              {/* Informations de sécurité */}
+              <div className="mt-4 pt-3">
+                <div className="row g-3">
+                  <div className="col-4">
+                    <div className="text-center">
+                      <i className="bi bi-shield-check text-success fs-4 d-block mb-2"></i>
+                      <small className="text-muted d-block">Sécurisé</small>
+                    </div>
+                  </div>
+                  <div className="col-4">
+                    <div className="text-center">
+                      <i className="bi bi-lightning-charge text-warning fs-4 d-block mb-2"></i>
+                      <small className="text-muted d-block">Rapide</small>
+                    </div>
+                  </div>
+                  <div className="col-4">
+                    <div className="text-center">
+                      <i className="bi bi-currency-exchange text-info fs-4 d-block mb-2"></i>
+                      <small className="text-muted d-block">P2P</small>
+                    </div>
+                  </div>
+                </div>
               </div>
 
-              {/* Debug info */}
-              <div className="mt-4 p-3 bg-light rounded">
-                <small className="text-muted">
-                  <strong>Debug Info:</strong><br />
-                  - API Status: {apiStatus?.connected ? 'Connected ✅' : 'Disconnected ❌'}<br />
-                  - Loading: {loading ? 'Yes' : 'No'}<br />
-                  - Form Filled: {formData.fullName && formData.email && formData.phone && formData.password ? 'Yes' : 'No'}
-                </small>
+              {/* Conditions */}
+              <div className="mt-4">
+                <p className="text-center text-muted small">
+                  En créant un compte, vous acceptez nos{' '}
+                  <a href="/conditions" className="text-decoration-none">Conditions d'utilisation</a>{' '}
+                  et notre{' '}
+                  <a href="/confidentialite" className="text-decoration-none">Politique de confidentialité</a>.
+                </p>
               </div>
-
             </div>
           </div>
         </div>

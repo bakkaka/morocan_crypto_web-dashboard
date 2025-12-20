@@ -1,4 +1,4 @@
-// src/App.tsx
+// src/App.tsx - VERSION CORRIGÉE
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import PublicLayout from "./components/PublicLayout";
@@ -511,7 +511,7 @@ function App() {
             <Route path="transactions" element={<TransactionList />} />
             <Route path="profile" element={<Profile />} />
             
-            {/* Gestion bancaire */}
+            {/* Gestion bancaire - Pour utilisateur normal */}
             <Route path="bank-details" element={
               <UserRoute>
                 <UserBankDetails />
@@ -534,8 +534,12 @@ function App() {
               <Route path="users" element={<AdminRoute><UserList /></AdminRoute>} />
               <Route path="ads" element={<AdminRoute><AdList filter="moderation" /></AdminRoute>} />
               <Route path="analytics" element={<AdminRoute><AnalyticsPage /></AdminRoute>} />
-              <Route path="bank-details" element={<AdminRoute><UserBankDetails adminView={true} /></AdminRoute>} />
-              <Route path="currencies" element={<AdminRoute><Currency adminView={true} /></AdminRoute>} />
+              
+              {/* Admin bank details - sans prop adminView */}
+              <Route path="bank-details" element={<AdminRoute><UserBankDetails /></AdminRoute>} />
+              
+              {/* Admin currencies - sans prop adminView */}
+              <Route path="currencies" element={<AdminRoute><Currency /></AdminRoute>} />
             </Route>
             
             {/* 404 dans dashboard */}
@@ -547,10 +551,8 @@ function App() {
             } />
           </Route>
 
-          {/* Fallback global 404 (si aucune route ne correspond) */}
-          <Route path="*" element={<PublicLayout />}>
-  <Route index element={<NotFound />} />
-</Route>
+          {/* Fallback global 404 */}
+          <Route path="*" element={<Navigate to="/" />} />
           
         </Routes>
       </Router>

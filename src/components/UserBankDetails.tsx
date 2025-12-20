@@ -1,11 +1,13 @@
-// src/components/UserBankDetails/UserBankDetails.tsx - VERSION SIMPLIFIÉE SANS GRID
+// src/components/UserBankDetails/UserBankDetails.tsx - VERSION CORRIGÉE
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 
-// Imports de base
+// Imports API
+import { getAuthToken } from '../api/UserService';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../api/axiosConfig';
 
-// Imports Material-UI de base (sans Grid)
+// Imports Material-UI
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import Button from '@mui/material/Button';
@@ -21,25 +23,28 @@ import DialogContent from '@mui/material/DialogContent';
 import DialogActions from '@mui/material/DialogActions';
 import IconButton from '@mui/material/IconButton';
 import Snackbar from '@mui/material/Snackbar';
+import Switch from '@mui/material/Switch';
+import FormControlLabel from '@mui/material/FormControlLabel';
 
 // Icônes
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AccountBalanceIcon from '@mui/icons-material/AccountBalance';
-import type AuthContext from '../contexts/AuthContext';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 
 // ==============================
 // TYPES
 // ==============================
 
-interface BankDetail {
+export interface UserBankDetail {
   id?: number;
   bankName: string;
   accountNumber: string;
   accountHolder: string;
   iban?: string;
   swiftCode?: string;
+  branchName?: string;
   currency: string;
   isActive: boolean;
   createdAt?: string;
@@ -52,6 +57,7 @@ interface BankDetailFormData {
   accountHolder: string;
   iban: string;
   swiftCode: string;
+  branchName: string;
   currency: string;
   isActive: boolean;
 }
@@ -64,12 +70,15 @@ const UserBankDetails: React.FC = () => {
   // ==============================
   // STATE
   // ==============================
-  const { user, isAuthenticated, ensureValidUserId } = useAuth();
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const token = getAuthToken();
   
-  const [bankDetails, setBankDetails] = useState<BankDetail[]>([]);
+  const [bankDetails, setBankDetails] = useState<UserBankDetail[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string>('');
   const [successMessage, setSuccessMessage] = useState<string>('');
+  const [copySuccess, setCopySuccess] = useState<string>('');
   
   const [openDialog, setOpenDialog] = useState<boolean>(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -78,9 +87,10 @@ const UserBankDetails: React.FC = () => {
   const [formData, setFormData] = useState<BankDetailFormData>({
     bankName: '',
     accountNumber: '',
-    accountHolder: '',
+    accountHolder: user?.fullName || '',
     iban: '',
     swiftCode: '',
+    branchName: '',
     currency: 'MAD',
     isActive: true,
   });
@@ -89,50 +99,42 @@ const UserBankDetails: React.FC = () => {
   // UTILITY FUNCTIONS
   // ==============================
   
-  const getStableUserId = useCallback(async (): Promise<number> => {
-    if (!user || !isAuthenticated) {
-      throw new Error('Utilisateur non authentifié');
-    }
-    
-    try {
-      const validUserId = await ensureValidUserId();
-      return validUserId;
-    } catch (error) {
-      console.error('Erreur récupération ID:', error);
-      
-      if (user.id && user.id > 0) {
-        return user.id;
+  const maskAccountNumber = (accountNumber: string): string => {
+    if (!accountNumber) return '••••';
+    if (accountNumber.length <= 4) return accountNumber;
+    return '••••' + accountNumber.slice(-4);
+  };
+
+  const copyToClipboard = (text: string, type: string) => {
+    navigator.clipboard.writeText(text).then(
+      () => {
+        setCopySuccess(`${type} copié !`);
+        setTimeout(() => setCopySuccess(''), 2000);
+      },
+      (err) => {
+        console.error('Erreur copie:', err);
       }
-      
-      if (user.email) {
-        let hash = 0;
-        for (let i = 0; i < user.email.length; i++) {
-          hash = ((hash << 5) - hash) + user.email.charCodeAt(i);
-          hash |= 0;
-        }
-        return 100000 + (Math.abs(hash) % 100000);
-      }
-      
-      throw new Error('Impossible de déterminer l\'ID utilisateur');
-    }
-  }, [user, isAuthenticated, ensureValidUserId]);
-  
+    );
+  };
+
   const validateBankDetail = (data: BankDetailFormData): string[] => {
     const errors: string[] = [];
     
     if (!data.bankName.trim()) {
-      errors.push('Nom de la banque requis');
+      errors.push('Nom de la banque est requis');
     }
     
     if (!data.accountNumber.trim()) {
-      errors.push('Numéro de compte requis');
+      errors.push('Numéro de compte est requis');
+    } else if (!/^[0-9]+$/.test(data.accountNumber.replace(/\s/g, ''))) {
+      errors.push('Numéro de compte invalide (chiffres seulement)');
     }
     
     if (!data.accountHolder.trim()) {
-      errors.push('Titulaire du compte requis');
+      errors.push('Titulaire du compte est requis');
     }
     
-    if (data.iban && !/^[A-Z]{2}\d{2}[A-Z0-9]{1,30}$/.test(data.iban)) {
+    if (data.iban && !/^[A-Z]{2}[0-9]{2}[A-Z0-9]{1,30}$/.test(data.iban.replace(/\s/g, ''))) {
       errors.push('IBAN invalide');
     }
     
@@ -141,18 +143,18 @@ const UserBankDetails: React.FC = () => {
     }
     
     if (!data.currency) {
-      errors.push('Devise requise');
+      errors.push('Devise est requise');
     }
     
     return errors;
   };
 
   // ==============================
-  // API FUNCTIONS
+  // API FUNCTIONS - CORRECTIONS APPLIQUÉES
   // ==============================
   
   const fetchBankDetails = useCallback(async () => {
-    if (!isAuthenticated) {
+    if (!token) {
       setError('Veuillez vous connecter');
       setLoading(false);
       return;
@@ -162,167 +164,210 @@ const UserBankDetails: React.FC = () => {
       setLoading(true);
       setError('');
       
-      const userId = await getStableUserId();
+      console.log('📥 Chargement des coordonnées bancaires...');
       
-      console.log('Chargement coordonnées bancaires pour utilisateur:', userId);
+      // Essayer différents endpoints
+      let endpoints = [
+        '/user_bank_details',
+        '/user_bank_details/my-bank-accounts',
+        '/api/user_bank_details'
+      ];
       
-      const response = await api.get('/user_bank_details', {
-        params: { user: userId },
-        timeout: 10000,
-      });
+      let response: any = null;
+      let lastError: any = null;
       
-      if (response.data && Array.isArray(response.data)) {
-        setBankDetails(response.data);
-        console.log(`${response.data.length} coordonnées bancaires chargées`);
-      } else if (response.data?.['hydra:member']) {
-        setBankDetails(response.data['hydra:member']);
-        console.log(`${response.data['hydra:member'].length} coordonnées bancaires chargées`);
-      } else {
-        setBankDetails([]);
-        console.log('Aucune coordonnée bancaire trouvée');
+      for (const endpoint of endpoints) {
+        try {
+          response = await api.get(endpoint, {
+            headers: {
+              'Authorization': `Bearer ${token}`
+            }
+          });
+          console.log(`✅ Succès avec endpoint: ${endpoint}`);
+          break;
+        } catch (err: any) {
+          lastError = err;
+          console.log(`❌ Échec avec ${endpoint}: ${err.response?.status}`);
+          continue;
+        }
       }
       
-    } catch (error: any) {
-      console.error('Erreur chargement coordonnées bancaires:', error);
+      if (!response) {
+        throw lastError || new Error('Aucun endpoint ne fonctionne');
+      }
       
-      if (error.response?.status === 404) {
+      // EXTRACTION DES DONNÉES - CORRIGÉE POUR isActive
+      let bankDetailsData: UserBankDetail[] = [];
+      
+      if (response.data) {
+        // Fonction pour normaliser les données
+        const normalizeBankDetail = (item: any): UserBankDetail => ({
+          id: item.id,
+          bankName: item.bankName || item.bank_name || '',
+          accountNumber: item.accountNumber || item.account_number || '',
+          accountHolder: item.accountHolder || item.account_holder || '',
+          iban: item.iban,
+          swiftCode: item.swiftCode || item.swift_code,
+          branchName: item.branchName || item.branch_name,
+          currency: item.currency || 'MAD',
+          // CORRECTION IMPORTANTE : s'assurer que isActive est un boolean
+          isActive: item.isActive !== undefined ? Boolean(item.isActive) : 
+                   (item.is_active !== undefined ? Boolean(item.is_active) : true),
+          createdAt: item.createdAt || item.created_at,
+          updatedAt: item.updatedAt || item.updated_at,
+        });
+        
+        if (Array.isArray(response.data)) {
+          bankDetailsData = response.data.map(normalizeBankDetail);
+        } else if (response.data['hydra:member']) {
+          bankDetailsData = response.data['hydra:member'].map(normalizeBankDetail);
+        } else if (response.data.member) {
+          bankDetailsData = response.data.member.map(normalizeBankDetail);
+        } else if (typeof response.data === 'object' && response.data.id) {
+          bankDetailsData = [normalizeBankDetail(response.data)];
+        }
+      }
+      
+      console.log(`✅ ${bankDetailsData.length} coordonnée(s) bancaire(s) chargée(s)`);
+      console.log('📋 Données brutes:', bankDetailsData);
+      console.log('🔍 Détail isActive:', bankDetailsData.map(bd => ({id: bd.id, isActive: bd.isActive})));
+      
+      setBankDetails(bankDetailsData);
+      
+    } catch (error: any) {
+      console.error('❌ Erreur chargement coordonnées bancaires:', error);
+      
+      if (error.response?.status === 401) {
+        setError('Session expirée. Veuillez vous reconnecter.');
+        navigate('/login');
+      } else if (error.response?.status === 404) {
         setError('Aucune coordonnée bancaire trouvée');
         setBankDetails([]);
-      } else if (error.response?.status === 401) {
-        setError('Session expirée. Veuillez vous reconnecter.');
       } else {
-        setError('Erreur lors du chargement des coordonnées bancaires');
+        setError('Erreur lors du chargement des coordonnées bancaires. Code: ' + 
+                (error.response?.status || 'inconnu'));
       }
       
     } finally {
       setLoading(false);
     }
-  }, [isAuthenticated, getStableUserId]);
+  }, [token, navigate]);
   
   const saveBankDetail = async () => {
-  const errors = validateBankDetail(formData);
-  
-  if (errors.length > 0) {
-    setError(errors.join('. '));
-    return;
-  }
-  
-  try {
-    setLoading(true);
-    setError('');
+    const errors = validateBankDetail(formData);
     
-    const userId = await getStableUserId();
-    console.log('🆔 User ID pour sauvegarde:', userId);
+    if (errors.length > 0) {
+      setError(errors.join('. '));
+      return;
+    }
     
-    // OPTION 1: Format avec IRI (le plus courant avec API Platform)
-    const payload1 = {
-      bankName: formData.bankName,
-      accountNumber: formData.accountNumber,
-      accountHolder: formData.accountHolder,
-      iban: formData.iban || null,
-      swiftCode: formData.swiftCode || null,
-      currency: formData.currency,
-      isActive: formData.isActive,
-      user: `/api/users/${userId}`  // IRI format
-    };
-    
-    // OPTION 2: Format avec juste l'ID
-    const payload2 = {
-      ...formData,
-      user: userId  // Juste l'ID numérique
-    };
-    
-    // OPTION 3: Format sans 'user' field (peut-être géré par le backend automatiquement)
-    const payload3 = {
-      bankName: formData.bankName,
-      accountNumber: formData.accountNumber,
-      accountHolder: formData.accountHolder,
-      iban: formData.iban,
-      swiftCode: formData.swiftCode,
-      currency: formData.currency,
-      isActive: formData.isActive
-      // Pas de champ user
-    };
-    
-    // OPTION 4: Format avec 'userId' (différent de 'user')
-    const payload4 = {
-      ...formData,
-      userId: userId
-    };
-    
-    // Testez chaque payload
-    const payloads = [payload1, payload2, payload3, payload4];
-    const payloadNames = ['IRI Format', 'ID Numérique', 'Sans User', 'Avec userId'];
-    
-    for (let i = 0; i < payloads.length; i++) {
-      try {
-        console.log(`🔧 Test payload ${i + 1} (${payloadNames[i]}):`, payloads[i]);
-        
-        const response = editingId 
-          ? await api.put(`/user_bank_details/${editingId}`, payloads[i])
-          : await api.post('/user_bank_details', payloads[i]);
-        
-        console.log(`✅ SUCCÈS avec ${payloadNames[i]}!`, response.data);
-        
-        setSuccessMessage(editingId 
-          ? 'Coordonnée mise à jour !' 
-          : 'Coordonnée ajoutée !'
-        );
-        
-        resetForm();
-        setOpenDialog(false);
-        await fetchBankDetails();
-        return;
-        
-      } catch (testError: any) {
-        console.log(`❌ ${payloadNames[i]} échoué (${testError.response?.status}):`, 
-          testError.response?.data || testError.message);
-        
-        if (i === payloads.length - 1) {
-          // Dernier essai échoué, propager l'erreur
-          throw testError;
+    try {
+      setLoading(true);
+      setError('');
+      
+      console.log('💾 Sauvegarde coordonnée bancaire...');
+      
+      // Préparation des données
+      const payload: any = {
+        bankName: formData.bankName.trim(),
+        accountNumber: formData.accountNumber.trim(),
+        accountHolder: formData.accountHolder.trim(),
+        currency: formData.currency,
+        isActive: formData.isActive,
+      };
+
+      // AJOUTER L'UTILISATEUR - CORRECTION
+      if (user?.id) {
+        payload.user = `/api/users/${user.id}`;
+        payload.userId = user.id;
+        payload.createdBy = user.id;
+      } else {
+        throw new Error('Utilisateur non connecté');
+      }
+      
+      // Champs optionnels
+      if (formData.iban.trim()) {
+        payload.iban = formData.iban.trim().toUpperCase();
+      }
+      
+      if (formData.swiftCode.trim()) {
+        payload.swiftCode = formData.swiftCode.trim().toUpperCase();
+      }
+      
+      if (formData.branchName.trim()) {
+        payload.branchName = formData.branchName.trim();
+      }
+      
+      console.log('📤 Payload envoyé avec user ID:', payload);
+      console.log('👤 ID utilisateur:', user?.id);
+      
+      let response;
+      
+      if (editingId) {
+        // Mise à jour
+        response = await api.put(`/user_bank_details/${editingId}`, payload, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        console.log('✅ Coordonnée mise à jour:', response.data);
+      } else {
+        // Création
+        response = await api.post('/user_bank_details', payload, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        console.log('✅ Coordonnée créée:', response.data);
+      }
+      
+      setSuccessMessage(editingId 
+        ? 'Coordonnée bancaire mise à jour avec succès !' 
+        : 'Coordonnée bancaire ajoutée avec succès !'
+      );
+      
+      resetForm();
+      setOpenDialog(false);
+      
+      // Recharger la liste
+      setTimeout(() => {
+        fetchBankDetails();
+      }, 500);
+      
+    } catch (error: any) {
+      console.error('💥 Erreur sauvegarde:', error);
+      
+      let errorMsg = 'Erreur lors de la sauvegarde';
+      
+      if (error.response?.data) {
+        if (error.response.data.violations) {
+          const violations = error.response.data.violations
+            .map((v: any) => `${v.propertyPath}: ${v.message}`)
+            .join(', ');
+          errorMsg = `Erreurs de validation: ${violations}`;
+        } else if (error.response.data.detail) {
+          errorMsg = error.response.data.detail;
+        } else if (error.response.data.message) {
+          errorMsg = error.response.data.message;
         }
       }
+      
+      setError(errorMsg);
+      
+    } finally {
+      setLoading(false);
     }
-    
-  } catch (error: any) {
-    console.error('💥 TOUTES les tentatives ont échoué');
-    
-    // Afficher l'erreur la plus détaillée
-    if (error.response?.data) {
-      console.log('🐛 ERREUR BACKEND DÉTAILLÉE:', error.response.data);
-      
-      // Essayez de parser l'erreur
-      let errorMessage = 'Erreur de validation';
-      
-      if (typeof error.response.data === 'string') {
-        errorMessage = error.response.data;
-      } else if (error.response.data.violations) {
-        const violations = error.response.data.violations
-          .map((v: any) => `• ${v.propertyPath}: ${v.message}`)
-          .join('\n');
-        errorMessage = `Problèmes:\n${violations}`;
-      } else if (error.response.data.detail) {
-        errorMessage = error.response.data.detail;
-      } else if (error.response.data.message) {
-        errorMessage = error.response.data.message;
-      }
-      
-      setError(errorMessage);
-    } else {
-      setError('Impossible de sauvegarder. Code erreur: ' + (error.response?.status || 'inconnu'));
-    }
-    
-  } finally {
-    setLoading(false);
-  }
-};
+  };
   
   const deleteBankDetail = async (id: number) => {
     try {
       setLoading(true);
       
-      await api.delete(`/user_bank_details/${id}`);
+      await api.delete(`/user_bank_details/${id}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
       
       setSuccessMessage('Coordonnée bancaire supprimée avec succès');
       setDeleteConfirm(null);
@@ -330,8 +375,8 @@ const UserBankDetails: React.FC = () => {
       await fetchBankDetails();
       
     } catch (error: any) {
-      console.error('Erreur suppression coordonnée bancaire:', error);
-      setError('Erreur lors de la suppression');
+      console.error('❌ Erreur suppression:', error);
+      setError('Erreur lors de la suppression. Code: ' + (error.response?.status || 'inconnu'));
     } finally {
       setLoading(false);
     }
@@ -345,9 +390,10 @@ const UserBankDetails: React.FC = () => {
     setFormData({
       bankName: '',
       accountNumber: '',
-      accountHolder: '',
+      accountHolder: user?.fullName || '',
       iban: '',
       swiftCode: '',
+      branchName: '',
       currency: 'MAD',
       isActive: true,
     });
@@ -359,13 +405,14 @@ const UserBankDetails: React.FC = () => {
     setOpenDialog(true);
   };
   
-  const handleOpenEdit = (bankDetail: BankDetail) => {
+  const handleOpenEdit = (bankDetail: UserBankDetail) => {
     setFormData({
       bankName: bankDetail.bankName,
       accountNumber: bankDetail.accountNumber,
       accountHolder: bankDetail.accountHolder,
       iban: bankDetail.iban || '',
       swiftCode: bankDetail.swiftCode || '',
+      branchName: bankDetail.branchName || '',
       currency: bankDetail.currency,
       isActive: bankDetail.isActive,
     });
@@ -375,7 +422,10 @@ const UserBankDetails: React.FC = () => {
   
   const handleCloseDialog = () => {
     setOpenDialog(false);
-    resetForm();
+    setTimeout(() => {
+      resetForm();
+      setError('');
+    }, 300);
   };
   
   const handleFormChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -392,58 +442,92 @@ const UserBankDetails: React.FC = () => {
   // ==============================
   
   useEffect(() => {
-    if (isAuthenticated) {
+    if (token) {
       fetchBankDetails();
     }
-  }, [isAuthenticated, fetchBankDetails]);
+  }, [token, fetchBankDetails]);
 
   // ==============================
   // RENDER FUNCTIONS
   // ==============================
   
-  const renderBankDetailCard = (bankDetail: BankDetail) => (
+  const renderBankDetailCard = (bankDetail: UserBankDetail) => (
     <Card key={bankDetail.id} sx={{ mb: 2, boxShadow: 2 }}>
       <CardContent>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <Box sx={{ flexGrow: 1 }}>
-            <Typography variant="h6" gutterBottom>
+            <Typography variant="h6" gutterBottom color="primary">
+              <AccountBalanceIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
               {bankDetail.bankName}
             </Typography>
             
-            <Typography variant="body2" color="textSecondary" gutterBottom>
-              <strong>Compte:</strong> {bankDetail.accountNumber}
-            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+              <Typography variant="body2" sx={{ mr: 1 }}>
+                <strong>Compte:</strong> {maskAccountNumber(bankDetail.accountNumber)}
+              </Typography>
+              <IconButton 
+                size="small" 
+                onClick={() => copyToClipboard(bankDetail.accountNumber, 'Numéro de compte')}
+                title="Copier le numéro"
+              >
+                <ContentCopyIcon fontSize="small" />
+              </IconButton>
+            </Box>
             
-            <Typography variant="body2" color="textSecondary" gutterBottom>
+            <Typography variant="body2" sx={{ mb: 1 }}>
               <strong>Titulaire:</strong> {bankDetail.accountHolder}
             </Typography>
             
             {bankDetail.iban && (
-              <Typography variant="body2" color="textSecondary" gutterBottom>
-                <strong>IBAN:</strong> {bankDetail.iban}
-              </Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                <Typography variant="body2" sx={{ mr: 1 }}>
+                  <strong>IBAN:</strong> {bankDetail.iban}
+                </Typography>
+                <IconButton 
+                  size="small" 
+                  onClick={() => copyToClipboard(bankDetail.iban || '', 'IBAN')}
+                  title="Copier l'IBAN"
+                >
+                  <ContentCopyIcon fontSize="small" />
+                </IconButton>
+              </Box>
             )}
             
             {bankDetail.swiftCode && (
-              <Typography variant="body2" color="textSecondary" gutterBottom>
+              <Typography variant="body2" sx={{ mb: 1 }}>
                 <strong>SWIFT/BIC:</strong> {bankDetail.swiftCode}
               </Typography>
             )}
             
-            <Typography variant="body2" color="textSecondary">
+            {bankDetail.branchName && (
+              <Typography variant="body2" sx={{ mb: 1 }}>
+                <strong>Agence:</strong> {bankDetail.branchName}
+              </Typography>
+            )}
+            
+            <Typography variant="body2" sx={{ mb: 1 }}>
               <strong>Devise:</strong> {bankDetail.currency}
             </Typography>
             
-            <Typography
-              variant="body2"
-              sx={{
-                color: bankDetail.isActive ? 'success.main' : 'error.main',
-                mt: 1,
-                fontWeight: 'bold',
-              }}
-            >
-              {bankDetail.isActive ? '✅ Actif' : '❌ Inactif'}
-            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', mt: 2 }}>
+              <Typography
+                variant="body2"
+                sx={{
+                  color: bankDetail.isActive ? 'success.main' : 'error.main',
+                  fontWeight: 'bold',
+                  display: 'flex',
+                  alignItems: 'center',
+                }}
+              >
+                {bankDetail.isActive ? '✅ Actif' : '❌ Inactif'}
+              </Typography>
+              
+              {bankDetail.createdAt && (
+                <Typography variant="caption" sx={{ ml: 2, color: 'text.secondary' }}>
+                  Créé le: {new Date(bankDetail.createdAt).toLocaleDateString('fr-FR')}
+                </Typography>
+              )}
+            </Box>
           </Box>
           
           <Box>
@@ -474,7 +558,7 @@ const UserBankDetails: React.FC = () => {
         Aucune coordonnée bancaire enregistrée.
       </Typography>
       <Typography variant="body2" sx={{ mt: 1 }}>
-        Ajoutez vos coordonnées bancaires pour faciliter les transactions.
+        Ajoutez vos coordonnées bancaires pour faciliter les transactions P2P.
       </Typography>
       <Button
         variant="contained"
@@ -490,6 +574,7 @@ const UserBankDetails: React.FC = () => {
   const renderLoadingState = () => (
     <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '200px' }}>
       <CircularProgress />
+      <Typography sx={{ ml: 2 }}>Chargement des coordonnées bancaires...</Typography>
     </Box>
   );
   
@@ -501,7 +586,7 @@ const UserBankDetails: React.FC = () => {
         onClick={fetchBankDetails}
         sx={{ mt: 1 }}
       >
-        Réessayer
+        Réessayer le chargement
       </Button>
     </Alert>
   );
@@ -509,10 +594,15 @@ const UserBankDetails: React.FC = () => {
   const renderBankDetailsList = () => (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
-        <Typography variant="h5" component="h2">
-          <AccountBalanceIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
-          Coordonnées bancaires
-        </Typography>
+        <Box>
+          <Typography variant="h5" component="h2">
+            <AccountBalanceIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
+            Mes Coordonnées Bancaires
+          </Typography>
+          <Typography variant="body2" color="textSecondary">
+            Gérez vos informations bancaires pour les transactions P2P
+          </Typography>
+        </Box>
         <Button
           variant="contained"
           startIcon={<AddIcon />}
@@ -522,12 +612,18 @@ const UserBankDetails: React.FC = () => {
         </Button>
       </Box>
       
+      {copySuccess && (
+        <Alert severity="success" sx={{ mb: 2 }}>
+          {copySuccess}
+        </Alert>
+      )}
+      
       {bankDetails.length === 0 ? (
         renderEmptyState()
       ) : (
         <Box>
           {bankDetails.map(renderBankDetailCard)}
-          <Typography variant="body2" color="textSecondary" sx={{ mt: 2 }}>
+          <Typography variant="body2" color="textSecondary" sx={{ mt: 2, textAlign: 'center' }}>
             {bankDetails.length} coordonnée(s) bancaire(s) enregistrée(s)
           </Typography>
         </Box>
@@ -536,7 +632,7 @@ const UserBankDetails: React.FC = () => {
   );
 
   // ==============================
-  // DIALOG FORM (SANS GRID)
+  // DIALOG FORM
   // ==============================
   
   const renderDialogForm = () => (
@@ -551,135 +647,132 @@ const UserBankDetails: React.FC = () => {
     >
       <DialogTitle sx={{ pb: 1 }}>
         <Typography variant="h6">
-          {editingId ? 'Modifier la coordonnée bancaire' : 'Ajouter une coordonnée bancaire'}
+          {editingId ? 'Modifier la coordonnée bancaire' : 'Nouvelle coordonnée bancaire'}
         </Typography>
       </DialogTitle>
       
       <DialogContent>
         <Box sx={{ mt: 1 }}>
-          {/* Champ 1 */}
-          <Box sx={{ mb: 2 }}>
-            <TextField
-              fullWidth
-              label="Nom de la banque *"
-              name="bankName"
-              value={formData.bankName}
-              onChange={handleFormChange}
-              required
-              variant="outlined"
-              size="small"
-            />
-          </Box>
+          {/* Nom de la banque */}
+          <TextField
+            fullWidth
+            label="Nom de la banque *"
+            name="bankName"
+            value={formData.bankName}
+            onChange={handleFormChange}
+            required
+            variant="outlined"
+            size="small"
+            sx={{ mb: 2 }}
+            placeholder="Ex: Banque Populaire"
+          />
           
-          {/* Champ 2 */}
-          <Box sx={{ mb: 2 }}>
-            <TextField
-              fullWidth
-              label="Numéro de compte *"
-              name="accountNumber"
-              value={formData.accountNumber}
-              onChange={handleFormChange}
-              required
-              variant="outlined"
-              size="small"
-            />
-          </Box>
+          {/* Numéro de compte */}
+          <TextField
+            fullWidth
+            label="Numéro de compte *"
+            name="accountNumber"
+            value={formData.accountNumber}
+            onChange={handleFormChange}
+            required
+            variant="outlined"
+            size="small"
+            sx={{ mb: 2 }}
+            placeholder="Ex: 123456789"
+          />
           
-          {/* Champ 3 */}
-          <Box sx={{ mb: 2 }}>
-            <TextField
-              fullWidth
-              label="Titulaire du compte *"
-              name="accountHolder"
-              value={formData.accountHolder}
-              onChange={handleFormChange}
-              required
-              variant="outlined"
-              size="small"
-            />
-          </Box>
+          {/* Titulaire du compte */}
+          <TextField
+            fullWidth
+            label="Titulaire du compte *"
+            name="accountHolder"
+            value={formData.accountHolder}
+            onChange={handleFormChange}
+            required
+            variant="outlined"
+            size="small"
+            sx={{ mb: 2 }}
+            placeholder="Ex: VOTRE NOM"
+          />
           
-          {/* Ligne IBAN et SWIFT */}
-          <Box sx={{ 
-            display: 'flex', 
-            flexDirection: { xs: 'column', sm: 'row' },
-            gap: 2,
-            mb: 2 
-          }}>
-            <Box sx={{ flex: 1 }}>
-              <TextField
-                fullWidth
-                label="IBAN"
-                name="iban"
-                value={formData.iban}
-                onChange={handleFormChange}
-                placeholder="FR76 XXXX XXXX XXXX XXXX XXXX XXX"
-                variant="outlined"
-                size="small"
+          {/* Nom de l'agence */}
+          <TextField
+            fullWidth
+            label="Nom de l'agence"
+            name="branchName"
+            value={formData.branchName}
+            onChange={handleFormChange}
+            variant="outlined"
+            size="small"
+            sx={{ mb: 2 }}
+            placeholder="Ex: Agence Centre Ville"
+          />
+          
+          {/* IBAN */}
+          <TextField
+            fullWidth
+            label="IBAN"
+            name="iban"
+            value={formData.iban}
+            onChange={handleFormChange}
+            variant="outlined"
+            size="small"
+            sx={{ mb: 2 }}
+            placeholder="MA64 0000 0000 0000 0000 0000 000"
+            helperText="Optionnel - Format international"
+          />
+          
+          {/* SWIFT/BIC */}
+          <TextField
+            fullWidth
+            label="Code SWIFT/BIC"
+            name="swiftCode"
+            value={formData.swiftCode}
+            onChange={handleFormChange}
+            variant="outlined"
+            size="small"
+            sx={{ mb: 2 }}
+            placeholder="Ex: BCPOMAMCXXX"
+            helperText="Optionnel - Pour virements internationaux"
+          />
+          
+          {/* Devise */}
+          <TextField
+            select
+            fullWidth
+            label="Devise *"
+            name="currency"
+            value={formData.currency}
+            onChange={handleFormChange}
+            required
+            variant="outlined"
+            size="small"
+            sx={{ mb: 2 }}
+          >
+            <MenuItem value="MAD">MAD (Dirham marocain)</MenuItem>
+            <MenuItem value="EUR">EUR (Euro)</MenuItem>
+            <MenuItem value="USD">USD (Dollar US)</MenuItem>
+          </TextField>
+          
+          {/* Statut */}
+          <FormControlLabel
+            control={
+              <Switch
+                checked={formData.isActive}
+                onChange={(e) => setFormData(prev => ({
+                  ...prev,
+                  isActive: e.target.checked
+                }))}
+                color="primary"
               />
-            </Box>
-            
-            <Box sx={{ flex: 1 }}>
-              <TextField
-                fullWidth
-                label="Code SWIFT/BIC"
-                name="swiftCode"
-                value={formData.swiftCode}
-                onChange={handleFormChange}
-                placeholder="BNPAFRPPXXX"
-                variant="outlined"
-                size="small"
-              />
-            </Box>
-          </Box>
-          
-          {/* Ligne Devise et Statut */}
-          <Box sx={{ 
-            display: 'flex', 
-            flexDirection: { xs: 'column', sm: 'row' },
-            gap: 2,
-            mb: 2 
-          }}>
-            <Box sx={{ flex: 1 }}>
-              <TextField
-                select
-                fullWidth
-                label="Devise *"
-                name="currency"
-                value={formData.currency}
-                onChange={handleFormChange}
-                required
-                variant="outlined"
-                size="small"
-              >
-                <MenuItem value="MAD">MAD (Dirham marocain)</MenuItem>
-                <MenuItem value="EUR">EUR (Euro)</MenuItem>
-                <MenuItem value="USD">USD (Dollar US)</MenuItem>
-                <MenuItem value="GBP">GBP (Livre sterling)</MenuItem>
-              </TextField>
-            </Box>
-            
-            <Box sx={{ flex: 1 }}>
-              <TextField
-                select
-                fullWidth
-                label="Statut"
-                name="isActive"
-                value={formData.isActive ? 'active' : 'inactive'}
-                onChange={(e) => {
-                  setFormData(prev => ({
-                    ...prev,
-                    isActive: e.target.value === 'active',
-                  }));
-                }}
-                variant="outlined"
-                size="small"
-              >
-                <MenuItem value="active">Actif</MenuItem>
-                <MenuItem value="inactive">Inactif</MenuItem>
-              </TextField>
-            </Box>
-          </Box>
+            }
+            label={
+              <Typography variant="body2">
+                {formData.isActive ? '✅ Actif (visible dans les annonces)' : '❌ Inactif (masqué)'}
+              </Typography>
+            }
+            sx={{ mb: 2 }}
+          />
         </Box>
         
         {error && (
@@ -699,17 +792,17 @@ const UserBankDetails: React.FC = () => {
           disabled={loading}
           sx={{ ml: 1 }}
         >
-          {loading ? <CircularProgress size={24} /> : 'Enregistrer'}
+          {loading ? <CircularProgress size={24} /> : (editingId ? 'Mettre à jour' : 'Ajouter')}
         </Button>
       </DialogActions>
     </Dialog>
   );
 
   // ==============================
-  // RENDER
+  // RENDER PRINCIPAL
   // ==============================
   
-  if (!isAuthenticated) {
+  if (!token) {
     return (
       <Box sx={{ maxWidth: 'md', mx: 'auto', p: 2 }}>
         <Alert severity="warning" sx={{ mt: 4 }}>
@@ -720,11 +813,11 @@ const UserBankDetails: React.FC = () => {
   }
   
   return (
-    <Box sx={{ maxWidth: 'md', mx: 'auto', p: 2 }}>
+    <Box sx={{ maxWidth: 'md', mx: 'auto', p: { xs: 1, sm: 2 } }}>
       {/* Notifications */}
       <Snackbar
         open={!!successMessage}
-        autoHideDuration={6000}
+        autoHideDuration={5000}
         onClose={() => setSuccessMessage('')}
         message={successMessage}
         anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
@@ -760,6 +853,10 @@ const UserBankDetails: React.FC = () => {
             Êtes-vous sûr de vouloir supprimer cette coordonnée bancaire ?
             Cette action est irréversible.
           </Typography>
+          <Alert severity="warning" sx={{ mt: 2 }}>
+            ⚠️ Si cette coordonnée est utilisée dans des annonces actives, 
+            celles-ci pourront être affectées.
+          </Alert>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 2 }}>
           <Button onClick={() => setDeleteConfirm(null)} variant="outlined">
@@ -772,7 +869,7 @@ const UserBankDetails: React.FC = () => {
             disabled={loading}
             sx={{ ml: 1 }}
           >
-            {loading ? <CircularProgress size={24} /> : 'Supprimer'}
+            {loading ? <CircularProgress size={24} /> : 'Supprimer définitivement'}
           </Button>
         </DialogActions>
       </Dialog>

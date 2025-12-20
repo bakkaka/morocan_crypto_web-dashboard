@@ -1,4 +1,4 @@
-// src/contexts/AuthContext.tsx - VERSION COMPATIBLE
+// src/contexts/AuthContext.tsx - VERSION COMPATIBLE ET OPTIMISÉE
 import React, { createContext, useState, useContext, useEffect, useMemo, useCallback } from 'react';
 import { 
   loginUser, 
@@ -35,7 +35,7 @@ interface AuthContextType {
   repairAuth: () => Promise<boolean>;
   fixUserId: () => Promise<boolean>;
   clearAuth: () => void;
-   ensureValidUserId: () => Promise<number>; 
+  ensureValidUserId: () => Promise<number>;
 }
 
 interface AuthState {
@@ -155,7 +155,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const fixUserId = useCallback(async (): Promise<boolean> => {
     try {
-      const fixed = await ensureValidUserId();
+      const fixed = await autoFixUserId();
       if (fixed) {
         const user = loadUserFromStorage();
         setState(prev => ({ ...prev, user }));
@@ -170,167 +170,167 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // ==============================
   // AUTH OPERATIONS
-// ==============================
+  // ==============================
 
-const login = useCallback(async (email: string, password: string): Promise<void> => {
-  try {
-    setState(prev => ({ ...prev, loading: true }));
-    const response: LoginResponse = await loginUser(email, password);
-    const storedUser = getCurrentUser();
-    if (!storedUser) throw new UserServiceError('Échec sauvegarde utilisateur');
-    setState(prev => ({
-      ...prev,
-      user: response.user,
-      loading: false,
-      lastValidation: Date.now(),
-    }));
-    if (response.user.id === 0) {
-      setTimeout(() => repairAuth(), 1000);
-    }
-  } catch (error) {
-    console.error('Erreur connexion:', error);
-    setState(prev => ({ ...prev, loading: false }));
-    throw error;
-  }
-}, [repairAuth]);
-
-const register = useCallback(async (userData: RegisterUserData): Promise<void> => {
-  try {
-    setState(prev => ({ ...prev, loading: true }));
-    await registerUser(userData);
-    const storedUser = getCurrentUser();
-    if (storedUser) {
+  const login = useCallback(async (email: string, password: string): Promise<void> => {
+    try {
+      setState(prev => ({ ...prev, loading: true }));
+      const response: LoginResponse = await loginUser(email, password);
+      const storedUser = getCurrentUser();
+      if (!storedUser) throw new UserServiceError('Échec sauvegarde utilisateur');
       setState(prev => ({
         ...prev,
-        user: storedUser,
+        user: response.user,
         loading: false,
         lastValidation: Date.now(),
       }));
-    } else {
+      if (response.user.id === 0) {
+        setTimeout(() => repairAuth(), 1000);
+      }
+    } catch (error) {
+      console.error('Erreur connexion:', error);
+      setState(prev => ({ ...prev, loading: false }));
+      throw error;
+    }
+  }, [repairAuth]);
+
+  const register = useCallback(async (userData: RegisterUserData): Promise<void> => {
+    try {
+      setState(prev => ({ ...prev, loading: true }));
+      await registerUser(userData);
+      const storedUser = getCurrentUser();
+      if (storedUser) {
+        setState(prev => ({
+          ...prev,
+          user: storedUser,
+          loading: false,
+          lastValidation: Date.now(),
+        }));
+      } else {
+        setState(prev => ({ ...prev, loading: false }));
+      }
+    } catch (error) {
+      console.error('Erreur inscription:', error);
+      setState(prev => ({ ...prev, loading: false }));
+      throw error;
+    }
+  }, []);
+
+  const logout = useCallback(async (): Promise<void> => {
+    try {
+      setState(prev => ({ ...prev, loading: true }));
+      logoutUser();
+      setState(prev => ({
+        ...prev,
+        user: null,
+        loading: false,
+        lastValidation: 0,
+      }));
+    } catch (error) {
+      console.error('Erreur déconnexion:', error);
       setState(prev => ({ ...prev, loading: false }));
     }
-  } catch (error) {
-    console.error('Erreur inscription:', error);
-    setState(prev => ({ ...prev, loading: false }));
-    throw error;
-  }
-}, []);
+  }, []);
 
-const logout = useCallback(async (): Promise<void> => {
-  try {
-    setState(prev => ({ ...prev, loading: true }));
+  const clearAuth = useCallback((): void => {
     logoutUser();
-    setState(prev => ({
-      ...prev,
-      user: null,
-      loading: false,
-      lastValidation: 0,
-    }));
-  } catch (error) {
-    console.error('Erreur déconnexion:', error);
-    setState(prev => ({ ...prev, loading: false }));
-  }
-}, []);
+    setState(prev => ({ ...prev, user: null, lastValidation: 0 }));
+  }, []);
 
-const clearAuth = useCallback((): void => {
-  logoutUser();
-  setState(prev => ({ ...prev, user: null, lastValidation: 0 }));
-}, []);
+  // ==============================
+  // EFFECTS
+  // ==============================
 
-// ==============================
-// EFFECTS
-// ==============================
+  useEffect(() => {
+    initializeAuth();
+  }, [initializeAuth]);
 
-useEffect(() => {
-  initializeAuth();
-}, [initializeAuth]);
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      if (state.user && Date.now() - state.lastValidation > 300000) {
+        await validateAuthState();
+      }
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [state.user, state.lastValidation, validateAuthState]);
 
-useEffect(() => {
-  const interval = setInterval(async () => {
-    if (state.user && Date.now() - state.lastValidation > 300000) {
-      await validateAuthState();
-    }
-  }, 60000);
-  return () => clearInterval(interval);
-}, [state.user, state.lastValidation, validateAuthState]);
+  useEffect(() => {
+    const handleStorageChange = (event: StorageEvent) => {
+      if (event.key?.includes('auth') || event.key?.includes('user')) {
+        setTimeout(() => initializeAuth(), 100);
+      }
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        validateAuthState();
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [initializeAuth, validateAuthState]);
 
-useEffect(() => {
-  const handleStorageChange = (event: StorageEvent) => {
-    if (event.key?.includes('auth') || event.key?.includes('user')) {
-      setTimeout(() => initializeAuth(), 100);
-    }
-  };
-  const handleVisibilityChange = () => {
-    if (document.visibilityState === 'visible') {
-      validateAuthState();
-    }
-  };
-  window.addEventListener('storage', handleStorageChange);
-  document.addEventListener('visibilitychange', handleVisibilityChange);
-  return () => {
-    window.removeEventListener('storage', handleStorageChange);
-    document.removeEventListener('visibilitychange', handleVisibilityChange);
-  };
-}, [initializeAuth, validateAuthState]);
+  // ==============================
+  // COMPUTED VALUES
+  // ==============================
 
-// ==============================
-// COMPUTED VALUES
-// ==============================
+  const { isAuthenticated, isAdmin, isUser } = useMemo(() => {
+    const authCheck = checkAuth();
+    const currentUser = state.user;
+    return {
+      isAuthenticated: authCheck && !!currentUser,
+      isAdmin: currentUser?.roles?.includes('ROLE_ADMIN') || false,
+      isUser: currentUser?.roles?.includes('ROLE_USER') || false,
+    };
+  }, [state.user]);
 
-const { isAuthenticated, isAdmin, isUser } = useMemo(() => {
-  const authCheck = checkAuth();
-  const currentUser = state.user;
-  return {
-    isAuthenticated: authCheck && !!currentUser,
-    isAdmin: currentUser?.roles?.includes('ROLE_ADMIN') || false,
-    isUser: currentUser?.roles?.includes('ROLE_USER') || false,
-  };
-}, [state.user]);
+  // ==============================
+  // CONTEXT VALUE
+  // ==============================
 
-// ==============================
-// CONTEXT VALUE
-// ==============================
+  const contextValue = useMemo((): AuthContextType => ({
+    user: state.user,
+    isAuthenticated,
+    isAdmin,
+    isUser,
+    loading: state.loading,
+    initialized: state.initialized,
+    login,
+    register,
+    logout,
+    refreshUser,
+    repairAuth,
+    fixUserId,
+    clearAuth,
+    ensureValidUserId
+  }), [
+    state.user,
+    state.loading,
+    state.initialized,
+    isAuthenticated,
+    isAdmin,
+    isUser,
+    login,
+    register,
+    logout,
+    refreshUser,
+    repairAuth,
+    fixUserId,
+    clearAuth,
+  ]);
 
-const contextValue = useMemo((): AuthContextType => ({
-  user: state.user,
-  isAuthenticated,
-  isAdmin,
-  isUser,
-  loading: state.loading,
-  initialized: state.initialized,
-  login,
-  register,
-  logout,
-  refreshUser,
-  repairAuth,
-  fixUserId,
-  clearAuth,
-  ensureValidUserId
-}), [
-  state.user,
-  state.loading,
-  state.initialized,
-  isAuthenticated,
-  isAdmin,
-  isUser,
-  login,
-  register,
-  logout,
-  refreshUser,
-  repairAuth,
-  fixUserId,
-  clearAuth,
-]);
+  // ==============================
+  // RENDER
+  // ==============================
 
-// ==============================
-// RENDER
-// ==============================
-
-return (
-  <AuthContext.Provider value={contextValue}>
-    {children}
-  </AuthContext.Provider>
-);
+  return (
+    <AuthContext.Provider value={contextValue}>
+      {children}
+    </AuthContext.Provider>
+  );
 };
 
 // ==============================

@@ -1,4 +1,4 @@
-// src/components/AdCreate.tsx
+// src/components/AdCreate.tsx - VERSION ULTIME CORRIGÉE
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -18,9 +18,12 @@ interface UserBankDetail {
   bankName: string;
   accountHolder: string;
   accountNumber: string;
-  maskedAccountNumber: string;
+  maskedAccountNumber?: string;
   isActive: boolean;
   branchName?: string;
+  swiftCode?: string;
+  iban?: string;
+  currency: string;
 }
 
 interface AdCreateData {
@@ -35,7 +38,10 @@ interface AdCreateData {
   terms?: string;
 }
 
-// Constants
+// ==============================
+// CONSTANTS
+// ==============================
+
 const VALIDATION = {
   MIN_AMOUNT: 10,
   MAX_AMOUNT: 100000,
@@ -50,9 +56,57 @@ const VALIDATION = {
   ]
 } as const;
 
+// ==============================
+// UTILITY FUNCTIONS
+// ==============================
+
+const extractHydraMember = (data: any): any[] => {
+  if (data?.member && Array.isArray(data.member)) return data.member;
+  if (data?.['hydra:member'] && Array.isArray(data['hydra:member'])) return data['hydra:member'];
+  if (Array.isArray(data)) return data;
+  if (data?.['@id'] || data?.id) return [data];
+  return [];
+};
+
+const normalizeBankDetail = (item: any): UserBankDetail => ({
+  id: item.id,
+  bankName: item.bankName || item.bank_name || '',
+  accountHolder: item.accountHolder || item.account_holder || '',
+  accountNumber: item.accountNumber || item.account_number || '',
+  maskedAccountNumber: item.maskedAccountNumber || '••••' + (item.accountNumber?.slice(-4) || item.account_number?.slice(-4) || ''),
+  isActive: item.isActive !== undefined ? Boolean(item.isActive) : (item.is_active !== undefined ? Boolean(item.is_active) : true),
+  branchName: item.branchName || item.branch_name,
+  swiftCode: item.swiftCode || item.swift_code,
+  iban: item.iban,
+  currency: item.currency || 'MAD',
+});
+
+const maskAccountNumber = (accountNumber: string): string => {
+  if (!accountNumber) return '••••';
+  if (accountNumber.length <= 4) return accountNumber;
+  return '••••' + accountNumber.slice(-4);
+};
+
+const ensureFloat = (value: any): number | undefined => {
+  if (value === undefined || value === null || value === '') return undefined;
+  const num = typeof value === 'string' ? parseFloat(value) : Number(value);
+  return isNaN(num) ? undefined : num;
+};
+
+const ensureInt = (value: any): number | undefined => {
+  if (value === undefined || value === null || value === '') return undefined;
+  const num = typeof value === 'string' ? parseInt(value, 10) : Number(value);
+  return isNaN(num) ? undefined : Math.round(num);
+};
+
+// ==============================
+// MAIN COMPONENT
+// ==============================
+
 const AdCreate: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
+  
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -75,12 +129,9 @@ const AdCreate: React.FC = () => {
     terms: ''
   });
 
-  const extractHydraMember = useCallback((data: any): any[] => {
-    if (data?.member && Array.isArray(data.member)) return data.member;
-    if (data?.['hydra:member'] && Array.isArray(data['hydra:member'])) return data['hydra:member'];
-    if (Array.isArray(data)) return data;
-    return [];
-  }, []);
+  // ==============================
+  // DATA LOADING
+  // ==============================
 
   const getCryptoCurrencies = useCallback((): Currency[] => {
     if (!currencies.length) return [];
@@ -91,27 +142,65 @@ const AdCreate: React.FC = () => {
     return userBankDetails.filter(bank => bank.isActive);
   }, [userBankDetails]);
 
+  const testBankDetailsEndpoints = useCallback(async (): Promise<string | null> => {
+    const endpoints = [
+      '/user_bank_details',
+      '/api/user_bank_details',
+      '/bank_details',
+      '/api/bank_details'
+    ];
+    
+    console.log('🧪 Test des endpoints pour coordonnées bancaires...');
+    
+    for (const endpoint of endpoints) {
+      try {
+        const response = await api.get(endpoint);
+        console.log(`✅ ${endpoint} fonctionne`);
+        return endpoint;
+      } catch (err: any) {
+        console.log(`❌ ${endpoint}: ${err.response?.status || 'Error'}`);
+      }
+    }
+    
+    return null;
+  }, []);
+
   // Load initial data
   useEffect(() => {
     const loadFormData = async () => {
+      if (!user) {
+        navigate('/login');
+        return;
+      }
+
       try {
         setDataLoading(true);
         setError(null);
         
         console.log('🔄 Chargement des données pour création d\'annonce...');
+        console.log('👤 User ID:', user?.id, 'Email:', user?.email);
+        
+        const workingEndpoint = await testBankDetailsEndpoints();
+        
+        if (!workingEndpoint) {
+          throw new Error('Aucun endpoint pour les coordonnées bancaires ne fonctionne');
+        }
         
         const [currenciesResponse, bankDetailsResponse] = await Promise.all([
           api.get('/currencies'),
-          api.get('/user_bank_details')
+          api.get(workingEndpoint)
         ]);
 
         const currenciesData = extractHydraMember(currenciesResponse.data);
-        const bankDetailsData = extractHydraMember(bankDetailsResponse.data);
-
+        const bankDetailsRaw = extractHydraMember(bankDetailsResponse.data);
+        
+        const bankDetailsData = bankDetailsRaw.map(normalizeBankDetail);
+        
         console.log('📥 Données chargées:', {
           currencies: currenciesData.length,
           bankDetails: bankDetailsData.length,
-          cryptoCurrencies: currenciesData.filter((c: Currency) => c.type === 'crypto').length
+          cryptoCurrencies: currenciesData.filter((c: Currency) => c.type === 'crypto').length,
+          activeBankDetails: bankDetailsData.filter(b => b.isActive).length
         });
 
         setCurrencies(currenciesData);
@@ -144,21 +233,29 @@ const AdCreate: React.FC = () => {
       }
     };
 
-    if (user) {
-      loadFormData();
-    } else {
-      navigate('/login');
-    }
-  }, [user, navigate, extractHydraMember]);
+    loadFormData();
+  }, [user, navigate, testBankDetailsEndpoints]);
+
+  // ==============================
+  // FORM HANDLERS
+  // ==============================
 
   const handleInputChange = useCallback((
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
   ) => {
     const { name, value, type } = e.target;
     
+    let processedValue: any = value;
+    
+    if (type === 'number') {
+      processedValue = value === '' ? undefined : parseFloat(value);
+    } else if (name === 'timeLimitMinutes') {
+      processedValue = parseInt(value, 10);
+    }
+    
     setFormData(prev => ({
       ...prev,
-      [name]: type === 'number' ? (value === '' ? 0 : parseFloat(value)) : value
+      [name]: processedValue
     }));
     
     if (error) setError(null);
@@ -190,6 +287,10 @@ const AdCreate: React.FC = () => {
     );
   }, [formData.acceptedBankDetails, userBankDetails]);
 
+  // ==============================
+  // VALIDATION
+  // ==============================
+
   const validateForm = useCallback((): string | null => {
     const selectedCurrency = getSelectedCurrency();
     
@@ -213,7 +314,6 @@ const AdCreate: React.FC = () => {
       return `Le prix minimum est de ${VALIDATION.MIN_PRICE} MAD`;
     }
 
-    // Validate min/max transaction amounts
     if (formData.minAmountPerTransaction && formData.maxAmountPerTransaction) {
       if (formData.minAmountPerTransaction > formData.maxAmountPerTransaction) {
         return 'Le montant minimum par transaction ne peut pas dépasser le maximum';
@@ -226,8 +326,16 @@ const AdCreate: React.FC = () => {
       }
     }
 
+    if (!formData.timeLimitMinutes || formData.timeLimitMinutes <= 0) {
+      return 'La durée de validité doit être supérieure à 0';
+    }
+
     return null;
   }, [formData, getSelectedCurrency]);
+
+  // ==============================
+  // FORM SUBMISSION - PAYLOAD CORRIGÉ
+  // ==============================
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -238,43 +346,102 @@ const AdCreate: React.FC = () => {
     try {
       const validationError = validateForm();
       if (validationError) throw new Error(validationError);
-
+      
       const selectedCurrency = getSelectedCurrency();
       const selectedBanks = getSelectedBankDetails();
+      
+      if (!selectedCurrency) {
+        throw new Error('Crypto-monnaie non sélectionnée');
+      }
+      
+      if (!user?.id) {
+        throw new Error('Utilisateur non connecté');
+      }
+      
+      if (selectedBanks.length === 0) {
+        throw new Error('Aucune coordonnée bancaire sélectionnée');
+      }
 
-      const postData = {
+      console.log('🚀 Création annonce - User ID:', user.id);
+      
+      // 🎯 PAYLOAD CORRIGÉ - MÊME FORMAT QUE LES BANK DETAILS
+      const postData: any = {
         type: formData.type,
-        amount: formData.amount.toString(),
-        price: formData.price.toString(),
+        amount: ensureFloat(formData.amount) || 0,
+        price: ensureFloat(formData.price) || 0,
         currency: formData.currency,
+        user: `/api/users/${user.id}`, // FORMAT IRI COMPLET (comme bank details)
+        createdBy: user.id, // Optionnel
         acceptedBankDetails: formData.acceptedBankDetails.map(id => `/api/user_bank_details/${id}`),
-        minAmountPerTransaction: formData.minAmountPerTransaction?.toString() || null,
-        maxAmountPerTransaction: formData.maxAmountPerTransaction?.toString() || null,
-        timeLimitMinutes: formData.timeLimitMinutes,
+        timeLimitMinutes: ensureInt(formData.timeLimitMinutes) || VALIDATION.DEFAULT_TIME_LIMIT,
         status: 'active',
-        terms: formData.terms?.trim() || undefined,
-        paymentMethod: `${selectedBanks.map(b => b.bankName).join(', ')}`
+        paymentMethod: `Virement bancaire - ${selectedBanks.map(b => b.bankName).join(', ')}`,
+        description: `${formData.type === 'buy' ? 'Achat' : 'Vente'} de ${formData.amount} ${selectedCurrency.code} à ${formData.price} MAD/unité`
       };
 
-      console.log('📤 Envoi création annonce:', postData);
+      // Champs optionnels
+      if (formData.minAmountPerTransaction) {
+        postData.minAmountPerTransaction = ensureFloat(formData.minAmountPerTransaction);
+      }
+      if (formData.maxAmountPerTransaction) {
+        postData.maxAmountPerTransaction = ensureFloat(formData.maxAmountPerTransaction);
+      }
+      if (formData.terms?.trim()) {
+        postData.terms = formData.terms.trim();
+      }
+
+      console.log('📦 PAYLOAD ENVOYÉ (avec user IRI):', postData);
+      console.log('🔍 Détail user:', postData.user);
 
       const response = await api.post('/ads', postData);
-      console.log('✅ Annonce créée:', response.data);
-
+      const adId = response.data.id;
+      
+      console.log('✅ Annonce créée avec succès, ID:', adId);
+      console.log('📋 Réponse API:', response.data);
+      
+      // Vérifier si user est dans la réponse
+      if (response.data.user) {
+        console.log('🎉 User présent dans la réponse!');
+      } else {
+        console.log('⚠️ User non présent dans la réponse JSON');
+        // Tenter un PATCH pour s'assurer de l'association
+        try {
+          console.log('🔄 Tentative PATCH pour forcer association...');
+          await api.patch(`/ads/${adId}`, {
+            user: `/api/users/${user.id}`
+          });
+          console.log('✅ User associé via PATCH');
+        } catch (patchError: any) {
+          console.log('⚠️ PATCH échoué:', patchError.message);
+        }
+      }
+      
       setSuccess(`✅ Annonce ${formData.type === 'buy' ? 'd\'achat' : 'de vente'} créée avec succès !`);
       
+      // Redirection après 2 secondes
       setTimeout(() => {
         navigate('/dashboard/ads');
       }, 2000);
 
     } catch (err: any) {
       console.error('❌ Erreur création annonce:', err);
-      if (err.response?.data?.violations) {
-        const violations = err.response.data.violations;
-        const errorMsg = violations.map((v: any) => `${v.propertyPath}: ${v.message}`).join(', ');
-        setError(`Erreur validation: ${errorMsg}`);
-      } else if (err.response?.data?.detail) {
-        setError(err.response.data.detail);
+      
+      if (err.response?.data) {
+        const errorData = err.response.data;
+        console.error('📋 Détails erreur API:', errorData);
+        
+        if (errorData.violations) {
+          const violations = errorData.violations.map((v: any) => `${v.propertyPath}: ${v.message}`).join(', ');
+          setError(`Erreurs de validation: ${violations}`);
+        } else if (errorData.detail) {
+          setError(`Erreur API: ${errorData.detail}`);
+        } else if (errorData.message) {
+          setError(errorData.message);
+        } else if (errorData.title) {
+          setError(errorData.title);
+        } else {
+          setError('Erreur lors de la création de l\'annonce');
+        }
       } else {
         setError(err.message || 'Erreur lors de la création');
       }
@@ -282,6 +449,10 @@ const AdCreate: React.FC = () => {
       setLoading(false);
     }
   };
+
+  // ==============================
+  // RENDER FUNCTIONS
+  // ==============================
 
   const renderBankDetails = () => {
     const activeBanks = getActiveBankDetails();
@@ -339,12 +510,18 @@ const AdCreate: React.FC = () => {
                     </small>
                     <small className="text-muted d-block">
                       <i className="bi bi-credit-card me-1"></i>
-                      {bank.maskedAccountNumber || '••••' + (bank.accountNumber?.slice(-4) || '')}
+                      {maskAccountNumber(bank.accountNumber)}
                     </small>
                     {bank.branchName && (
                       <small className="text-muted d-block">
                         <i className="bi bi-geo-alt me-1"></i>
                         {bank.branchName}
+                      </small>
+                    )}
+                    {bank.swiftCode && (
+                      <small className="text-muted d-block">
+                        <i className="bi bi-building me-1"></i>
+                        SWIFT: {bank.swiftCode}
                       </small>
                     )}
                   </div>
@@ -360,13 +537,21 @@ const AdCreate: React.FC = () => {
     );
   };
 
+  // ==============================
+  // CALCULATED VALUES
+  // ==============================
+
   const cryptoCurrencies = getCryptoCurrencies();
   const selectedCurrency = getSelectedCurrency();
   const selectedBankDetails = getSelectedBankDetails();
   const totalAmount = calculateTotal();
   const validationError = validateForm();
   const hasBankDetails = getActiveBankDetails().length > 0;
-  const canSubmit = !validationError && !loading && !dataLoading && selectedCurrency && hasBankDetails;
+  const canSubmit = !validationError && !loading && !dataLoading && selectedCurrency && hasBankDetails && user?.id;
+
+  // ==============================
+  // RENDER COMPONENT
+  // ==============================
 
   return (
     <div className="container py-4">
@@ -396,6 +581,18 @@ const AdCreate: React.FC = () => {
               Annuler
             </button>
           </div>
+
+          {/* User Info - Affiché seulement en développement */}
+          {user && import.meta.env.DEV && (
+            <div className="alert alert-info mb-3">
+              <i className="bi bi-person-circle me-2"></i>
+              <strong>Utilisateur connecté :</strong> {user.email} (ID: {user.id})
+              <div className="small mt-1">
+                <i className="bi bi-info-circle me-1"></i>
+                L'utilisateur sera automatiquement lié à l'annonce via IRI: /api/users/{user.id}
+              </div>
+            </div>
+          )}
 
           {/* Status Messages */}
           {error && (
@@ -506,7 +703,7 @@ const AdCreate: React.FC = () => {
                           type="number"
                           className="form-control"
                           name="amount"
-                          value={formData.amount}
+                          value={formData.amount || ''}
                           onChange={handleInputChange}
                           step="0.000001"
                           min={VALIDATION.MIN_AMOUNT}
@@ -534,7 +731,7 @@ const AdCreate: React.FC = () => {
                           type="number"
                           className="form-control"
                           name="price"
-                          value={formData.price}
+                          value={formData.price || ''}
                           onChange={handleInputChange}
                           step="0.01"
                           min={VALIDATION.MIN_PRICE}
@@ -691,7 +888,7 @@ const AdCreate: React.FC = () => {
                     <textarea
                       className="form-control"
                       name="terms"
-                      value={formData.terms}
+                      value={formData.terms || ''}
                       onChange={handleInputChange}
                       placeholder="Ex: Disponible de 9h à 18h, virements immédiats uniquement, première transaction limitée à 1000 MAD..."
                       rows={3}
