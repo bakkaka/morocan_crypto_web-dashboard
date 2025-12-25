@@ -1,4 +1,4 @@
-// src/components/AdCreate.tsx - VERSION CORRIGÉE
+// src/components/AdCreate.tsx
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -333,110 +333,59 @@ const AdCreate: React.FC = () => {
     return null;
   }, [formData, getSelectedCurrency]);
 
-  // ==============================
-  // FORM SUBMISSION
-  // ==============================
-
   const handleSubmit = async (e: React.FormEvent) => {
   e.preventDefault();
   setLoading(true);
   setError(null);
   setSuccess(null);
 
-  try {
-    const validationError = validateForm();
-    if (validationError) throw new Error(validationError);
-    
-    const selectedCurrency = getSelectedCurrency();
-    const selectedBanks = getSelectedBankDetails();
-    
-    if (!selectedCurrency) {
-      throw new Error('Crypto-monnaie non sélectionnée');
-    }
-    
-    if (!user?.id) {
-      throw new Error('Utilisateur non connecté');
-    }
-    
-    if (selectedBanks.length === 0) {
-      throw new Error('Aucune coordonnée bancaire sélectionnée');
-    }
+    try {
+      const validationError = validateForm();
+      if (validationError) throw new Error(validationError);
 
-    console.log('🚀 Création annonce - User ID:', user.id);
-    
-    // CORRECTION : AJOUTER LE USER DANS LE PAYLOAD
-    const postData: any = {
-      type: formData.type,
-      amount: ensureFloat(formData.amount) || 0,
-      price: ensureFloat(formData.price) || 0,
-      currency: formData.currency,
-      user: `/api/users/${user.id}`, // ← LIGNE AJOUTÉE
-       createdBy: user.id, // ← Optionnel, certains backends l'attenden
-      acceptedBankDetails: formData.acceptedBankDetails.map(id => `/api/user_bank_details/${id}`),
-      timeLimitMinutes: ensureInt(formData.timeLimitMinutes) || VALIDATION.DEFAULT_TIME_LIMIT,
-      status: 'active',
-      paymentMethod: `Virement bancaire - ${selectedBanks.map(b => b.bankName).join(', ')}`,
-      description: `${formData.type === 'buy' ? 'Achat' : 'Vente'} de ${formData.amount} ${selectedCurrency.code} à ${formData.price} MAD/unité`
-    };
+      const selectedCurrency = getSelectedCurrency();
+      const selectedBanks = getSelectedBankDetails();
 
-    if (formData.minAmountPerTransaction) {
-      postData.minAmountPerTransaction = ensureFloat(formData.minAmountPerTransaction);
-    }
-    if (formData.maxAmountPerTransaction) {
-      postData.maxAmountPerTransaction = ensureFloat(formData.maxAmountPerTransaction);
-    }
-    if (formData.terms?.trim()) {
-      postData.terms = formData.terms.trim();
-    }
+      const postData = {
+        type: formData.type,
+        amount: formData.amount.toString(),
+        price: formData.price.toString(),
+        currency: formData.currency,
+        acceptedBankDetails: formData.acceptedBankDetails.map(id => `/api/user_bank_details/${id}`),
+        minAmountPerTransaction: formData.minAmountPerTransaction?.toString() || null,
+        maxAmountPerTransaction: formData.maxAmountPerTransaction?.toString() || null,
+        timeLimitMinutes: formData.timeLimitMinutes,
+        status: 'active',
+        terms: formData.terms?.trim() || undefined,
+        paymentMethod: `${selectedBanks.map(b => b.bankName).join(', ')}`
+      };
 
-    console.log('📦 Payload envoyé (AVEC user):', postData);
+      console.log('📤 Envoi création annonce:', postData);
 
-    const response = await api.post('/ads', postData);
-    console.log('✅ Annonce créée:', response.data);
-    
-    if (response.data.user) {
-      console.log('🎉 User présent dans la réponse:', response.data.user);
-    } else {
-      console.log('⚠️ Attention: User non présent dans la réponse JSON');
-      console.log('📋 Réponse complète:', response.data);
-    }
-    
-    setSuccess(`✅ Annonce ${formData.type === 'buy' ? 'd\'achat' : 'de vente'} créée avec succès !`);
-    
-    setTimeout(() => {
-      navigate('/dashboard/ads');
-    }, 2000);
+      const response = await api.post('/ads', postData);
+      console.log('✅ Annonce créée:', response.data);
 
-  } catch (err: any) {
-    console.error('❌ Erreur création annonce:', err);
-    
-    if (err.response?.data) {
-      const errorData = err.response.data;
-      console.error('📋 Détails erreur API:', errorData);
+      setSuccess(`✅ Annonce ${formData.type === 'buy' ? 'd\'achat' : 'de vente'} créée avec succès !`);
       
-      if (errorData.violations) {
-        const violations = errorData.violations.map((v: any) => `${v.propertyPath}: ${v.message}`).join(', ');
-        setError(`Erreurs de validation: ${violations}`);
-      } else if (errorData.detail) {
-        setError(`Erreur API: ${errorData.detail}`);
-      } else if (errorData.message) {
-        setError(errorData.message);
-      } else if (errorData.title) {
-        setError(errorData.title);
-      } else {
-        setError('Erreur lors de la création de l\'annonce');
-      }
-    } else {
-      setError(err.message || 'Erreur lors de la création');
-    }
-  } finally {
-    setLoading(false);
-  }
-};
+      setTimeout(() => {
+        navigate('/dashboard/ads');
+      }, 2000);
 
-  // ==============================
-  // RENDER FUNCTIONS
-  // ==============================
+    } catch (err: any) {
+      console.error('❌ Erreur création annonce:', err);
+      if (err.response?.data?.violations) {
+        const violations = err.response.data.violations;
+        const errorMsg = violations.map((v: any) => `${v.propertyPath}: ${v.message}`).join(', ');
+        setError(`Erreur validation: ${errorMsg}`);
+      } else if (err.response?.data?.detail) {
+        setError(err.response.data.detail);
+      } else {
+        setError(err.message || 'Erreur lors de la création');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const renderBankDetails = () => {
     const activeBanks = getActiveBankDetails();
@@ -565,18 +514,6 @@ const AdCreate: React.FC = () => {
               Annuler
             </button>
           </div>
-
-        {/* User Info - Affiché seulement en développement */}
-    {user && import.meta.env.DEV && (
-       <div className="alert alert-info mb-3">
-      <i className="bi bi-person-circle me-2"></i>
-        <strong>Utilisateur connecté :</strong> {user.email} (ID: {user.id})
-      <div className="small mt-1">
-      <i className="bi bi-info-circle me-1"></i>
-      L'utilisateur sera automatiquement lié à l'annonce par le backend
-    </div>
-  </div>
-)}
 
           {/* Status Messages */}
           {error && (

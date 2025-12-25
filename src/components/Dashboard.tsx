@@ -1,10 +1,26 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { Link, Outlet, useLocation } from 'react-router-dom';
 
 const Dashboard: React.FC = () => {
   const { user, logout, isAdmin, isUser } = useAuth();
   const location = useLocation();
+
+  // DEBUG des rôles
+  useEffect(() => {
+    console.log('🔍 DEBUG RÔLES:', {
+      user,
+      roles: user?.roles,
+      rolesType: typeof user?.roles,
+      isAdmin: isAdmin,
+      isUser: isUser,
+      rawStorage: localStorage.getItem('mc_auth_data')
+    });
+  }, [user, isAdmin, isUser]);
+
+  // Déterminer si on est en développement
+  const isDevelopment = window.location.hostname === 'localhost' || 
+                       window.location.hostname === '127.0.0.1';
 
   if (!user) {
     return (
@@ -13,7 +29,7 @@ const Dashboard: React.FC = () => {
           <div className="spinner-border text-primary" role="status">
             <span className="visually-hidden">Chargement...</span>
           </div>
-          <p className="mt-3">Chargement...</p>
+          <p className="mt-3">Chargement du profil...</p>
         </div>
       </div>
     );
@@ -24,8 +40,73 @@ const Dashboard: React.FC = () => {
     return location.pathname === path || location.pathname.startsWith(path + '/');
   };
 
+  // Fonction pour normaliser les rôles
+  const normalizeRoles = (roles: any): string[] => {
+    if (!roles) return [];
+    
+    if (Array.isArray(roles)) {
+      return roles.map(r => String(r).toUpperCase().trim());
+    }
+    
+    if (typeof roles === 'string') {
+      try {
+        const cleanStr = roles
+          .replace(/\[ "/g, '["')
+          .replace(/", "/g, '","')
+          .replace(/" \]/g, '"]')
+          .replace(/'/g, '"');
+        
+        const parsed = JSON.parse(cleanStr);
+        if (Array.isArray(parsed)) {
+          return parsed.map(r => String(r).toUpperCase().trim());
+        }
+        return [String(parsed).toUpperCase().trim()];
+      } catch {
+        return roles
+          .replace(/[\[\]"']/g, '')
+          .split(',')
+          .map((r: string) => r.trim().toUpperCase());
+      }
+    }
+    
+    return [];
+  };
+
+  // Rôles normalisés pour l'affichage
+  const normalizedRoles = normalizeRoles(user.roles);
+  const displayRole = normalizedRoles.includes('ROLE_ADMIN') ? 'Administrateur' : 
+                     normalizedRoles.includes('ROLE_USER') ? 'Utilisateur' : 'Membre';
+
   return (
     <div className="min-vh-100 bg-light">
+      {/* DEBUG PANEL - Seulement en développement local */}
+      {isDevelopment && (
+        <div className="bg-dark text-white p-2 small">
+          <div className="container">
+            <div className="row align-items-center">
+              <div className="col-auto">
+                <span className="badge bg-warning text-dark">DEV MODE</span>
+              </div>
+              <div className="col">
+                ID: {user.id} | Rôles: {JSON.stringify(normalizedRoles)} | 
+                isAdmin: {isAdmin.toString()} | isUser: {isUser.toString()}
+              </div>
+              <div className="col-auto">
+                <button 
+                  className="btn btn-sm btn-outline-light"
+                  onClick={() => {
+                    localStorage.clear();
+                    window.location.reload();
+                  }}
+                >
+                  Clear Cache
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Navigation Bootstrap avec séparation des rôles */}
       <nav className="navbar navbar-expand-lg navbar-dark bg-primary shadow">
         <div className="container">
@@ -42,13 +123,13 @@ const Dashboard: React.FC = () => {
             type="button" 
             data-bs-toggle="collapse" 
             data-bs-target="#navbarNav"
+            aria-label="Toggle navigation"
           >
             <span className="navbar-toggler-icon"></span>
           </button>
 
           <div className="collapse navbar-collapse" id="navbarNav">
             <div className="navbar-nav me-auto">
-              {/* Liens communs à tous les utilisateurs */}
               <Link 
                 className={`nav-link mx-2 ${isActiveLink('/dashboard') ? 'active' : ''}`} 
                 to="/dashboard"
@@ -73,31 +154,48 @@ const Dashboard: React.FC = () => {
                 Transactions
               </Link>
 
-              {/* Liens réservés aux ADMINS */}
               {isAdmin && (
-                <Link 
-                  className={`nav-link mx-2 ${isActiveLink('/dashboard/users') ? 'active' : ''}`} 
-                  to="/dashboard/users"
-                >
-                  <i className="bi bi-people me-1"></i>
-                  Utilisateurs
-                </Link>
+                <>
+                  <Link 
+                    className={`nav-link mx-2 ${isActiveLink('/dashboard/users') ? 'active' : ''}`} 
+                    to="/dashboard/users"
+                  >
+                    <i className="bi bi-people me-1"></i>
+                    Utilisateurs
+                  </Link>
+                  
+                  <Link 
+                    className={`nav-link mx-2 ${isActiveLink('/dashboard/admin') ? 'active' : ''}`} 
+                    to="/dashboard/admin"
+                  >
+                    <i className="bi bi-gear me-1"></i>
+                    Administration
+                  </Link>
+                </>
               )}
 
-              {/* Liens réservés aux USERS */}
               {isUser && (
-                <Link 
-                  className={`nav-link mx-2 ${isActiveLink('/dashboard/ads/create') ? 'active' : ''}`} 
-                  to="/dashboard/ads/create"
-                >
-                  <i className="bi bi-plus-circle me-1"></i>
-                  Créer Annonce
-                </Link>
+                <>
+                  <Link 
+                    className={`nav-link mx-2 ${isActiveLink('/dashboard/ads/create') ? 'active' : ''}`} 
+                    to="/dashboard/ads/create"
+                  >
+                    <i className="bi bi-plus-circle me-1"></i>
+                    Créer Annonce
+                  </Link>
+                  
+                  <Link 
+                    className={`nav-link mx-2 ${isActiveLink('/dashboard/wallet') ? 'active' : ''}`} 
+                    to="/dashboard/wallet"
+                  >
+                    <i className="bi bi-wallet me-1"></i>
+                    Mon Portefeuille
+                  </Link>
+                </>
               )}
             </div>
 
             <div className="navbar-nav align-items-center flex-row">
-              {/* Lien Profil */}
               <Link 
                 className={`nav-link mx-2 ${isActiveLink('/dashboard/profile') ? 'active' : ''}`} 
                 to="/dashboard/profile"
@@ -106,47 +204,37 @@ const Dashboard: React.FC = () => {
                 Profil
               </Link>
               
-              {/* Affichage du nom d'utilisateur TOUJOURS visible */}
               <div className="d-flex align-items-center ms-3">
-                {/* Avatar avec initiale */}
                 <div 
                   className="bg-white text-primary rounded-circle d-flex align-items-center justify-content-center me-2" 
                   style={{width: '32px', height: '32px', flexShrink: 0}}
                 >
-                  <span className="fw-bold small">{user.fullName.charAt(0)}</span>
+                  <span className="fw-bold small">{user.fullName?.charAt(0) || 'U'}</span>
                 </div>
                 
-                {/* Nom d'utilisateur - visible sur desktop, caché sur mobile */}
                 <div className="d-none d-md-block text-start me-3">
-                  <div className="small text-white fw-bold">{user.fullName}</div>
+                  <div className="small text-white fw-bold">{user.fullName || 'Utilisateur'}</div>
                   <div className="x-small text-white-50">
-                    {isAdmin ? 'Administrateur' : 'Utilisateur'}
+                    {displayRole}
                   </div>
                 </div>
                 
-                {/* Dropdown pour les actions */}
                 <div className="dropdown">
                   <button 
-                    className="btn btn-outline-light dropdown-toggle" 
+                    className="btn btn-outline-light dropdown-toggle d-flex align-items-center" 
                     type="button" 
                     data-bs-toggle="dropdown"
                     style={{padding: '6px 12px'}}
+                    aria-expanded="false"
                   >
-                    <i className="bi bi-chevron-down"></i>
+                    <i className="bi bi-three-dots-vertical"></i>
                   </button>
-                  <ul className="dropdown-menu dropdown-menu-end">
+                  <ul className="dropdown-menu dropdown-menu-end shadow">
                     <li>
-                      <span className="dropdown-item-text small">
-                        <strong>{user.fullName}</strong>
-                      </span>
-                      <span className="dropdown-item-text small text-muted">
-                        {user.email}
-                      </span>
-                      {user.roles && (
-                        <span className="dropdown-item-text small text-muted">
-                          Rôle: {isAdmin ? 'Administrateur' : 'Utilisateur'}
-                        </span>
-                      )}
+                      <div className="dropdown-header">
+                        <div className="fw-bold">{user.fullName}</div>
+                        <small className="text-muted">{user.email}</small>
+                      </div>
                     </li>
                     <li><hr className="dropdown-divider" /></li>
                     <li>
@@ -156,7 +244,20 @@ const Dashboard: React.FC = () => {
                       </Link>
                     </li>
                     <li>
-                      <button className="dropdown-item text-danger" onClick={logout}>
+                      <Link className="dropdown-item" to="/dashboard/settings">
+                        <i className="bi bi-gear me-2"></i>
+                        Paramètres
+                      </Link>
+                    </li>
+                    <li>
+                      <button 
+                        className="dropdown-item text-danger" 
+                        onClick={() => {
+                          if (window.confirm('Êtes-vous sûr de vouloir vous déconnecter ?')) {
+                            logout();
+                          }
+                        }}
+                      >
                         <i className="bi bi-box-arrow-right me-2"></i>
                         Déconnexion
                       </button>
@@ -169,24 +270,84 @@ const Dashboard: React.FC = () => {
         </div>
       </nav>
 
-      {/* Section d'information du rôle */}
       {isAdmin && (
         <div className="bg-warning bg-opacity-10 border-start border-warning border-5">
           <div className="container py-2">
-            <div className="d-flex align-items-center">
-              <i className="bi bi-shield-check text-warning me-2"></i>
-              <small className="text-warning">
-                <strong>Mode Administrateur</strong> - Vous avez accès à toutes les fonctionnalités
-              </small>
+            <div className="d-flex align-items-center justify-content-between">
+              <div className="d-flex align-items-center">
+                <i className="bi bi-shield-check text-warning me-2"></i>
+                <small className="text-warning">
+                  <strong>Mode Administrateur</strong> - Accès complet au système
+                </small>
+              </div>
+              <div className="text-warning small">
+                Rôles: {normalizedRoles.join(', ')}
+              </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Contenu des routes enfants */}
-      <div className="container mt-4">
-        <Outlet />
+      <div className="container mt-4 mb-5">
+        <div className="row">
+          <div className="col-12">
+            <nav aria-label="breadcrumb" className="mb-4">
+              <ol className="breadcrumb">
+                <li className="breadcrumb-item">
+                  <Link to="/dashboard">Dashboard</Link>
+                </li>
+                {location.pathname !== '/dashboard' && (
+                  <li className="breadcrumb-item active" aria-current="page">
+                    {location.pathname.split('/').pop()}
+                  </li>
+                )}
+              </ol>
+            </nav>
+            
+            <div className="card shadow-sm">
+              <div className="card-body">
+                <Outlet />
+              </div>
+            </div>
+            
+            {/* Debug info seulement en local */}
+            {isDevelopment && (
+              <div className="mt-3 text-muted small">
+                <details>
+                  <summary>Debug Info</summary>
+                  <pre className="mt-2 p-2 bg-dark text-white rounded" style={{fontSize: '12px'}}>
+                    {JSON.stringify({
+                      path: location.pathname,
+                      user: { id: user.id, email: user.email },
+                      roles: normalizedRoles,
+                      permissions: { isAdmin, isUser },
+                      hostname: window.location.hostname
+                    }, null, 2)}
+                  </pre>
+                </details>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
+
+      <footer className="bg-dark text-white py-3 mt-auto">
+        <div className="container">
+          <div className="row">
+            <div className="col-md-6">
+              <span className="text-warning">MoroccanCrypto P2P</span> &copy; {new Date().getFullYear()}
+            </div>
+            <div className="col-md-6 text-md-end">
+              <span className="badge bg-secondary me-2">
+                v1.0.0
+              </span>
+              <span className="badge bg-info">
+                {isAdmin ? 'Mode Admin' : 'Mode Utilisateur'}
+              </span>
+            </div>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 };
