@@ -339,53 +339,54 @@ const AdCreate: React.FC = () => {
   setError(null);
   setSuccess(null);
 
-    try {
-      const validationError = validateForm();
-      if (validationError) throw new Error(validationError);
+  try {
+    const validationError = validateForm();
+    if (validationError) throw new Error(validationError);
 
-      const selectedCurrency = getSelectedCurrency();
-      const selectedBanks = getSelectedBankDetails();
+    const selectedCurrency = getSelectedCurrency();
+    const selectedBanks = getSelectedBankDetails();
 
-      const postData = {
-        type: formData.type,
-        amount: formData.amount.toString(),
-        price: formData.price.toString(),
-        currency: formData.currency,
-        acceptedBankDetails: formData.acceptedBankDetails.map(id => `/api/user_bank_details/${id}`),
-        minAmountPerTransaction: formData.minAmountPerTransaction?.toString() || null,
-        maxAmountPerTransaction: formData.maxAmountPerTransaction?.toString() || null,
-        timeLimitMinutes: formData.timeLimitMinutes,
-        status: 'active',
-        terms: formData.terms?.trim() || undefined,
-        paymentMethod: `${selectedBanks.map(b => b.bankName).join(', ')}`
-      };
+    // CORRECTION : Envoyer les nombres comme des nombres, pas des strings
+    const postData = {
+      type: formData.type,
+      amount: Number(formData.amount),  // ✅ Convertir en nombre
+      price: Number(formData.price),    // ✅ Convertir en nombre
+      currency: formData.currency,
+      acceptedBankDetails: formData.acceptedBankDetails.map(id => `/api/user_bank_details/${id}`),
+      minAmountPerTransaction: formData.minAmountPerTransaction ? Number(formData.minAmountPerTransaction) : null,
+      maxAmountPerTransaction: formData.maxAmountPerTransaction ? Number(formData.maxAmountPerTransaction) : null,
+      timeLimitMinutes: formData.timeLimitMinutes,
+      status: 'active',
+      terms: formData.terms?.trim() || undefined,
+      paymentMethod: `${selectedBanks.map(b => b.bankName).join(', ')}`
+    };
 
-      console.log('📤 Envoi création annonce:', postData);
+    console.log('📤 Envoi création annonce:', postData);
 
-      const response = await api.post('/ads', postData);
-      console.log('✅ Annonce créée:', response.data);
+    const response = await api.post('/ads', postData);
+    console.log('✅ Annonce créée:', response.data);
 
-      setSuccess(`✅ Annonce ${formData.type === 'buy' ? 'd\'achat' : 'de vente'} créée avec succès !`);
-      
-      setTimeout(() => {
-        navigate('/dashboard/ads');
-      }, 2000);
+    setSuccess(`✅ Annonce ${formData.type === 'buy' ? 'd\'achat' : 'de vente'} créée avec succès !`);
+    
+    setTimeout(() => {
+      navigate('/dashboard/ads');
+    }, 2000);
 
-    } catch (err: any) {
-      console.error('❌ Erreur création annonce:', err);
-      if (err.response?.data?.violations) {
-        const violations = err.response.data.violations;
-        const errorMsg = violations.map((v: any) => `${v.propertyPath}: ${v.message}`).join(', ');
-        setError(`Erreur validation: ${errorMsg}`);
-      } else if (err.response?.data?.detail) {
-        setError(err.response.data.detail);
-      } else {
-        setError(err.message || 'Erreur lors de la création');
-      }
-    } finally {
-      setLoading(false);
+  } catch (err: any) {
+    console.error('❌ Erreur création annonce:', err);
+    if (err.response?.data?.violations) {
+      const violations = err.response.data.violations;
+      const errorMsg = violations.map((v: any) => `${v.propertyPath}: ${v.message}`).join(', ');
+      setError(`Erreur validation: ${errorMsg}`);
+    } else if (err.response?.data?.detail) {
+      setError(err.response.data.detail);
+    } else {
+      setError(err.message || 'Erreur lors de la création');
     }
-  };
+  } finally {
+    setLoading(false);
+  }
+};
 
   const renderBankDetails = () => {
     const activeBanks = getActiveBankDetails();
