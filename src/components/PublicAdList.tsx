@@ -1,4 +1,4 @@
-// src/components/PublicAdList.tsx
+// src/components/PublicAdList.tsx - VERSION CORRIGÉE AVEC DEBUG
 import React, { useEffect, useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -94,7 +94,6 @@ const PublicAdList: React.FC = () => {
     const notification: Notification = { type, message, id };
     setNotifications(prev => [...prev, notification]);
     
-    // Auto-remove after 5 seconds
     setTimeout(() => {
       setNotifications(prev => prev.filter(n => n.id !== id));
     }, 5000);
@@ -202,7 +201,7 @@ const PublicAdList: React.FC = () => {
 
   const handleBuyAd = async (ad: Ad) => {
     if (!isAuthenticated || !user) {
-      showNotification('warning', 'Connectez-vous pour acheter !');
+      showNotification('warning', 'Connectez-vous pour échanger !');
       navigate('/login', { state: { from: '/market' } });
       return;
     }
@@ -215,7 +214,7 @@ const PublicAdList: React.FC = () => {
 
     // Vérifier qu'on n'achète pas sa propre annonce
     if (ad.user.id === user.id) {
-      showNotification('warning', 'Vous ne pouvez pas acheter votre propre annonce !');
+      showNotification('warning', 'Vous ne pouvez pas échanger avec votre propre annonce !');
       return;
     }
 
@@ -230,8 +229,9 @@ const PublicAdList: React.FC = () => {
       if (!hasEnoughBalance) return;
     }
 
+    const actionType = ad.type === 'sell' ? 'l\'achat' : 'la vente';
     if (!window.confirm(
-      `Confirmer ${ad.type === 'sell' ? 'l\'achat' : 'la vente'} de ${ad.amount} ${ad.currency.code} à ${ad.price} MAD ?\n\n` +
+      `Confirmer ${actionType} de ${ad.amount} ${ad.currency.code} à ${ad.price} MAD ?\n\n` +
       `Total: ${calculateTotal(ad).toLocaleString('fr-MA')} MAD\n` +
       `${ad.type === 'sell' ? 'Vendeur' : 'Acheteur'}: ${ad.user.fullName}\n` +
       `Méthode: ${ad.paymentMethod}`
@@ -240,11 +240,9 @@ const PublicAdList: React.FC = () => {
     }
 
     try {
-      // Ajouter à la liste des transactions actives
       setActiveTransactions(prev => new Set(prev).add(ad.id));
       setCreatingTransaction(ad.id);
       
-      // Préparer les données pour la transaction
       const transactionData: TransactionCreateData = {
         ad: ad['@id'] || `/api/ads/${ad.id}`,
         buyer: ad.type === 'sell' ? `/api/users/${user.id}` : `/api/users/${ad.user.id}`,
@@ -256,7 +254,6 @@ const PublicAdList: React.FC = () => {
 
       console.log('🔄 Création de transaction:', transactionData);
 
-      // Essayer différents endpoints
       const endpoints = ['/api/transactions', '/transactions'];
       let response = null;
       
@@ -279,7 +276,6 @@ const PublicAdList: React.FC = () => {
         `Transaction créée !\nID: ${transaction.id}\nRedirection vers la page de paiement...`
       );
       
-      // Rediriger vers la page de la transaction
       setTimeout(() => {
         navigate(`/dashboard/transactions/${transaction.id}`);
       }, 2000);
@@ -300,7 +296,6 @@ const PublicAdList: React.FC = () => {
       showNotification('error', errorMessage);
       
     } finally {
-      // Retirer de la liste des transactions actives
       setActiveTransactions(prev => {
         const newSet = new Set(prev);
         newSet.delete(ad.id);
@@ -317,7 +312,6 @@ const PublicAdList: React.FC = () => {
       return;
     }
     
-    // Pour l'instant, redirection vers le dashboard
     navigate('/dashboard/messages', { 
       state: { 
         recipientId: ad.user.id,
@@ -398,7 +392,6 @@ const PublicAdList: React.FC = () => {
       
       showNotification('success', `Annonce ${actionText} avec succès !`);
       
-      // Recharger après un délai
       setTimeout(() => {
         loadAds();
       }, 1000);
@@ -431,7 +424,7 @@ const PublicAdList: React.FC = () => {
       return;
     }
 
-    if (!window.confirm('Êtes-vous sûr de vouloir supprimer définitivement cette annonce ? Cette action est irréversible et supprimera également toutes les transactions associées.')) {
+    if (!window.confirm('Êtes-vous sûr de vouloir supprimer définitivement cette annonce ? Cette action est irréversible.')) {
       return;
     }
 
@@ -443,7 +436,6 @@ const PublicAdList: React.FC = () => {
       
       showNotification('success', 'Annonce supprimée définitivement avec succès !');
       
-      // Recharger après un délai
       setTimeout(() => {
         loadAds();
       }, 1000);
@@ -487,7 +479,6 @@ const PublicAdList: React.FC = () => {
         itemsPerPage: 50
       };
 
-      // Si admin, voir toutes les annonces, sinon seulement les actives
       if (!isAdmin) {
         params.status = 'active';
       }
@@ -497,7 +488,6 @@ const PublicAdList: React.FC = () => {
       const adsData = extractHydraMember(response.data);
       console.log('✅ Annonces chargées:', adsData.length);
       
-      // Calculer si les annonces ont expiré
       const now = new Date();
       const formattedAds: Ad[] = adsData.map((ad: any) => {
         const createdAt = new Date(ad.createdAt || now);
@@ -545,7 +535,6 @@ const PublicAdList: React.FC = () => {
   useEffect(() => {
     loadAds();
     
-    // Rafraîchir automatiquement toutes les 30 secondes
     const interval = setInterval(() => {
       loadAds();
     }, 30000);
@@ -571,7 +560,6 @@ const PublicAdList: React.FC = () => {
         (ad.currency?.code?.toLowerCase() || '') === currencyFilter.toLowerCase();
       const matchesStatus = statusFilter === 'all' || ad.status === statusFilter;
       
-      // Si pas admin, seulement les actives
       if (!isAdmin && ad.status !== 'active' && !ad.isExpired) return false;
       
       return matchesSearch && matchesType && matchesCurrency && matchesStatus;
@@ -670,7 +658,6 @@ const PublicAdList: React.FC = () => {
             {isAdmin ? 'Panel d\'administration des annonces' : 'Achetez et vendez des cryptomonnaies en MAD avec des particuliers de confiance'}
           </p>
           
-          {/* Stats rapides */}
           <div className="flex flex-wrap justify-center gap-4 mb-8">
             <div className="bg-white/10 backdrop-blur-sm rounded-lg px-6 py-3">
               <div className="text-2xl font-bold text-yellow-400">{ads.length}</div>
@@ -698,7 +685,6 @@ const PublicAdList: React.FC = () => {
             )}
           </div>
           
-          {/* CTA Buttons */}
           {!isAuthenticated && (
             <div className="flex flex-col md:flex-row gap-4 justify-center mb-8">
               <Link 
@@ -736,7 +722,6 @@ const PublicAdList: React.FC = () => {
           </h2>
           
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
-            {/* Recherche */}
             <div className="md:col-span-2">
               <label className="text-gray-700 mb-2 block font-medium">Rechercher</label>
               <div className="relative">
@@ -758,7 +743,6 @@ const PublicAdList: React.FC = () => {
               </div>
             </div>
             
-            {/* Type */}
             <div>
               <label className="text-gray-700 mb-2 block font-medium">Type</label>
               <select
@@ -772,7 +756,6 @@ const PublicAdList: React.FC = () => {
               </select>
             </div>
             
-            {/* Devise */}
             <div>
               <label className="text-gray-700 mb-2 block font-medium">Devise</label>
               <select
@@ -787,7 +770,6 @@ const PublicAdList: React.FC = () => {
               </select>
             </div>
             
-            {/* Statut (visible seulement pour admin) */}
             {isAdmin && (
               <div>
                 <label className="text-gray-700 mb-2 block font-medium">Statut</label>
@@ -806,7 +788,6 @@ const PublicAdList: React.FC = () => {
               </div>
             )}
             
-            {/* Trier par */}
             <div>
               <label className="text-gray-700 mb-2 block font-medium">Trier par</label>
               <div className="flex gap-2">
@@ -831,34 +812,26 @@ const PublicAdList: React.FC = () => {
             </div>
           </div>
           
-          {/* Actions rapides admin */}
           {isAdmin && (
             <div className="mt-6 pt-6 border-t border-gray-200">
               <div className="flex flex-wrap gap-2">
                 <button 
                   className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition"
-                  onClick={() => {
-                    // Activer toutes les annonces sélectionnées
-                    showNotification('info', 'Fonctionnalité en développement');
-                  }}
+                  onClick={() => showNotification('info', 'Fonctionnalité en développement')}
                 >
                   <i className="bi bi-check-circle me-2"></i>
                   Activer sélection
                 </button>
                 <button 
                   className="px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition"
-                  onClick={() => {
-                    showNotification('info', 'Fonctionnalité en développement');
-                  }}
+                  onClick={() => showNotification('info', 'Fonctionnalité en développement')}
                 >
                   <i className="bi bi-pause-circle me-2"></i>
                   Suspendre sélection
                 </button>
                 <button 
                   className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition"
-                  onClick={() => {
-                    showNotification('info', 'Fonctionnalité en développement');
-                  }}
+                  onClick={() => showNotification('info', 'Fonctionnalité en développement')}
                 >
                   <i className="bi bi-trash me-2"></i>
                   Supprimer sélection
@@ -867,7 +840,6 @@ const PublicAdList: React.FC = () => {
             </div>
           )}
           
-          {/* Résultats */}
           <div className="mt-6 pt-6 border-t border-gray-200">
             <div className="flex justify-between items-center">
               <div>
@@ -947,7 +919,6 @@ const PublicAdList: React.FC = () => {
           </div>
         ) : (
           <>
-            {/* Grid des annonces */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {filteredAds.map((ad) => {
                 const isUserAd = user && ad.user.id === user.id;
@@ -956,9 +927,19 @@ const PublicAdList: React.FC = () => {
                 const isTransactionActive = activeTransactions.has(ad.id);
                 const isAdModifying = modifyingAd === ad.id;
                 
+                // DEBUG: Log pour voir pourquoi les boutons n'apparaissent pas
+                console.log('🔍 DEBUG Ad:', {
+                  id: ad.id,
+                  isUserAd,
+                  userAdId: ad.user?.id,
+                  currentUserId: user?.id,
+                  status: ad.status,
+                  isExpired: ad.isExpired,
+                  shouldShowBuySell: !isUserAd && ad.status === 'active' && !ad.isExpired
+                });
+
                 return (
                   <div key={ad.id} className="bg-white rounded-xl shadow-md hover:shadow-xl transition-all duration-300 border border-gray-200 hover:border-blue-300">
-                    {/* En-tête avec badges */}
                     <div className="p-6 border-b border-gray-100">
                       <div className="flex justify-between items-start mb-4">
                         <div>
@@ -1001,18 +982,15 @@ const PublicAdList: React.FC = () => {
                         </div>
                       </div>
                       
-                      {/* Titre */}
                       <h3 className="text-xl font-bold text-gray-900 mb-3">
                         {ad.type === 'buy' ? 'Achat de' : 'Vente de'} {ad.amount} {ad.currency?.code}
                       </h3>
                       
-                      {/* Méthode de paiement */}
                       <div className="flex items-center text-gray-700 mb-3">
                         <i className="bi bi-bank text-gray-500 me-2"></i>
                         <span className="font-medium">{ad.paymentMethod}</span>
                       </div>
                       
-                      {/* Conditions */}
                       {ad.terms && (
                         <div className="mb-4">
                           <div className="flex items-center text-gray-600 mb-1">
@@ -1026,9 +1004,7 @@ const PublicAdList: React.FC = () => {
                       )}
                     </div>
                     
-                    {/* Infos transaction */}
                     <div className="p-6 bg-gray-50 rounded-b-xl">
-                      {/* Totaux */}
                       <div className="mb-4">
                         <div className="flex justify-between items-center mb-2">
                           <span className="text-gray-600">Montant total</span>
@@ -1037,7 +1013,6 @@ const PublicAdList: React.FC = () => {
                           </span>
                         </div>
                         
-                        {/* Limites */}
                         {(ad.minAmountPerTransaction || ad.maxAmountPerTransaction) && (
                           <div className="text-sm text-gray-500">
                             <i className="bi bi-sliders me-1"></i>
@@ -1047,7 +1022,6 @@ const PublicAdList: React.FC = () => {
                         )}
                       </div>
                       
-                      {/* Vendeur/Acheteur */}
                       <div className="flex justify-between items-center pt-4 border-t border-gray-200">
                         <div>
                           <div className="text-sm text-gray-600">
@@ -1075,14 +1049,12 @@ const PublicAdList: React.FC = () => {
                           </div>
                         </div>
                         
-                        {/* ID annonce */}
                         <div className="text-right">
                           <div className="text-sm text-gray-600">ID</div>
                           <div className="font-mono text-gray-800">#{ad.id}</div>
                         </div>
                       </div>
                       
-                      {/* Boutons d'action */}
                       <div className="mt-6 space-y-3">
                         {/* Boutons admin */}
                         {isAdmin && (
@@ -1145,62 +1117,63 @@ const PublicAdList: React.FC = () => {
                         {/* Boutons utilisateur */}
                         {isAuthenticated ? (
                           <>
-                            {/* Si ce n'est PAS notre annonce ET annonce active */}
-                            {!isUserAd && ad.status === 'active' && !ad.isExpired && (
-                              <>
-                                {/* Pour les annonces de VENTE : bouton ACHETER */}
-                                {isSellAd && (
-                                  <button 
-                                    className="w-full py-3 bg-gradient-to-r from-green-600 to-green-700 text-white font-bold rounded-lg hover:from-green-700 hover:to-green-800 transition shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
-                                    onClick={() => handleBuyAd(ad)}
-                                    disabled={isTransactionActive || isAdModifying}
-                                    title={`Acheter ${ad.amount} ${ad.currency.code} pour ${calculateTotal(ad)} MAD`}
-                                  >
-                                    {isTransactionActive ? (
-                                      <>
-                                        <span className="spinner-border spinner-border-sm me-2"></span>
-                                        Création transaction...
-                                      </>
-                                    ) : (
-                                      <>
-                                        🛒 Acheter maintenant
-                                        <br />
-                                        <small className="text-xs opacity-75">
-                                          Total: {calculateTotal(ad).toLocaleString('fr-MA')} MAD
-                                        </small>
-                                      </>
-                                    )}
-                                  </button>
-                                )}
-                                
-                                {/* Pour les annonces d'ACHAT : bouton VENDRE */}
-                                {!isSellAd && (
-                                  <button 
-                                    className="w-full py-3 bg-gradient-to-r from-orange-600 to-orange-700 text-white font-bold rounded-lg hover:from-orange-700 hover:to-orange-800 transition shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
-                                    onClick={() => handleBuyAd(ad)}
-                                    disabled={isTransactionActive || isAdModifying}
-                                    title={`Vendre ${ad.amount} ${ad.currency.code} pour ${calculateTotal(ad)} MAD`}
-                                  >
-                                    {isTransactionActive ? (
-                                      <>
-                                        <span className="spinner-border spinner-border-sm me-2"></span>
-                                        Création transaction...
-                                      </>
-                                    ) : (
-                                      <>
-                                        💰 Vendre à cet acheteur
-                                        <br />
-                                        <small className="text-xs opacity-75">
-                                          Total: {calculateTotal(ad).toLocaleString('fr-MA')} MAD
-                                        </small>
-                                      </>
-                                    )}
-                                  </button>
-                                )}
-                              </>
-                            )}
+                            {/* MODIFICATION IMPORTANTE : Montrer toujours les boutons pour debug */}
+                            <div className="space-y-2">
+                              {/* Pour les annonces de VENTE : bouton ACHETER */}
+                              {isSellAd && (
+                                <button 
+                                  className="w-full py-3 bg-gradient-to-r from-green-600 to-green-700 text-white font-bold rounded-lg hover:from-green-700 hover:to-green-800 transition shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+                                  onClick={() => handleBuyAd(ad)}
+                                  disabled={isTransactionActive || isAdModifying || isUserAd}
+                                  title={isUserAd ? 'Vous ne pouvez pas acheter votre propre annonce' : `Acheter ${ad.amount} ${ad.currency.code} pour ${calculateTotal(ad)} MAD`}
+                                >
+                                  {isTransactionActive ? (
+                                    <>
+                                      <span className="spinner-border spinner-border-sm me-2"></span>
+                                      Création transaction...
+                                    </>
+                                  ) : isUserAd ? (
+                                    'Votre annonce'
+                                  ) : (
+                                    <>
+                                      🛒 Acheter maintenant
+                                      <br />
+                                      <small className="text-xs opacity-75">
+                                        Total: {calculateTotal(ad).toLocaleString('fr-MA')} MAD
+                                      </small>
+                                    </>
+                                  )}
+                                </button>
+                              )}
+                              
+                              {/* Pour les annonces d'ACHAT : bouton VENDRE */}
+                              {!isSellAd && (
+                                <button 
+                                  className="w-full py-3 bg-gradient-to-r from-orange-600 to-orange-700 text-white font-bold rounded-lg hover:from-orange-700 hover:to-orange-800 transition shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+                                  onClick={() => handleBuyAd(ad)}
+                                  disabled={isTransactionActive || isAdModifying || isUserAd}
+                                  title={isUserAd ? 'Vous ne pouvez pas vendre à votre propre annonce' : `Vendre ${ad.amount} ${ad.currency.code} pour ${calculateTotal(ad)} MAD`}
+                                >
+                                  {isTransactionActive ? (
+                                    <>
+                                      <span className="spinner-border spinner-border-sm me-2"></span>
+                                      Création transaction...
+                                    </>
+                                  ) : isUserAd ? (
+                                    'Votre annonce'
+                                  ) : (
+                                    <>
+                                      💰 Vendre à cet acheteur
+                                      <br />
+                                      <small className="text-xs opacity-75">
+                                        Total: {calculateTotal(ad).toLocaleString('fr-MA')} MAD
+                                      </small>
+                                    </>
+                                  )}
+                                </button>
+                              )}
+                            </div>
                             
-                            {/* Boutons communs */}
                             <div className="grid grid-cols-2 gap-2">
                               <button 
                                 className="py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white font-medium rounded-lg hover:from-blue-700 hover:to-blue-800 transition disabled:opacity-50"
@@ -1245,7 +1218,6 @@ const PublicAdList: React.FC = () => {
               })}
             </div>
             
-            {/* Call to Action pour non connectés */}
             {!isAuthenticated && filteredAds.length > 0 && (
               <div className="mt-12 bg-gradient-to-r from-blue-900 to-purple-800 rounded-2xl p-8 text-center text-white shadow-xl">
                 <div className="max-w-3xl mx-auto">
@@ -1276,7 +1248,6 @@ const PublicAdList: React.FC = () => {
               </div>
             )}
             
-            {/* Statistiques */}
             <div className="mt-12 grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="bg-white p-6 rounded-xl shadow-sm text-center">
                 <div className="text-3xl font-bold text-green-600">
