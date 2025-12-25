@@ -1124,7 +1124,7 @@ const PublicAdList: React.FC = () => {
                                 <button 
                                   className="w-full py-3 bg-gradient-to-r from-green-600 to-green-700 text-white font-bold rounded-lg hover:from-green-700 hover:to-green-800 transition shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
                                   onClick={() => handleBuyAd(ad)}
-                                  disabled={isTransactionActive || isAdModifying || isUserAd}
+                                  disabled={!!(isTransactionActive || isAdModifying || isUserAd)}
                                   title={isUserAd ? 'Vous ne pouvez pas acheter votre propre annonce' : `Acheter ${ad.amount} ${ad.currency.code} pour ${calculateTotal(ad)} MAD`}
                                 >
                                   {isTransactionActive ? (
@@ -1151,7 +1151,7 @@ const PublicAdList: React.FC = () => {
                                 <button 
                                   className="w-full py-3 bg-gradient-to-r from-orange-600 to-orange-700 text-white font-bold rounded-lg hover:from-orange-700 hover:to-orange-800 transition shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
                                   onClick={() => handleBuyAd(ad)}
-                                  disabled={isTransactionActive || isAdModifying || isUserAd}
+                                  disabled={!!(isTransactionActive || isAdModifying || isUserAd)}
                                   title={isUserAd ? 'Vous ne pouvez pas vendre à votre propre annonce' : `Vendre ${ad.amount} ${ad.currency.code} pour ${calculateTotal(ad)} MAD`}
                                 >
                                   {isTransactionActive ? (
