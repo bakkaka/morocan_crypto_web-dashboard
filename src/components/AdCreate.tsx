@@ -333,7 +333,7 @@ const AdCreate: React.FC = () => {
     return null;
   }, [formData, getSelectedCurrency]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+ const handleSubmit = async (e: React.FormEvent) => {
   e.preventDefault();
   setLoading(true);
   setError(null);
@@ -346,25 +346,55 @@ const AdCreate: React.FC = () => {
     const selectedCurrency = getSelectedCurrency();
     const selectedBanks = getSelectedBankDetails();
 
-    // CORRECTION : Envoyer les nombres comme des nombres, pas des strings
-    const postData = {
+    // Vérification cruciale : l'utilisateur doit exister
+    if (!user?.id) {
+      throw new Error('Utilisateur non connecté');
+    }
+
+    console.log('🔍 DEBUG - Données avant envoi:', {
+      user_id: user.id,
+      amount: formData.amount,
+      amount_type: typeof formData.amount,
+      price: formData.price,
+      price_type: typeof formData.price,
+      currency: formData.currency
+    });
+
+    // CORRECTION 1: Convertir explicitement en FLOAT (pas en string)
+    // CORRECTION 2: Inclure le user dans le payload
+    const postData: any = {
       type: formData.type,
-      amount: Number(formData.amount),  // ✅ Convertir en nombre
-      price: Number(formData.price),    // ✅ Convertir en nombre
+      amount: parseFloat(formData.amount.toString()), // ✅ FLOAT, pas string
+      price: parseFloat(formData.price.toString()),   // ✅ FLOAT, pas string
       currency: formData.currency,
+      user: `/api/users/${user.id}`,                  // ✅ USER OBLIGATOIRE
       acceptedBankDetails: formData.acceptedBankDetails.map(id => `/api/user_bank_details/${id}`),
-      minAmountPerTransaction: formData.minAmountPerTransaction ? Number(formData.minAmountPerTransaction) : null,
-      maxAmountPerTransaction: formData.maxAmountPerTransaction ? Number(formData.maxAmountPerTransaction) : null,
       timeLimitMinutes: formData.timeLimitMinutes,
       status: 'active',
-      terms: formData.terms?.trim() || undefined,
-      paymentMethod: `${selectedBanks.map(b => b.bankName).join(', ')}`
+      paymentMethod: `Virement bancaire (${selectedBanks.map(b => b.bankName).join(', ')})`,
+      minAmountPerTransaction: formData.minAmountPerTransaction ? 
+        parseFloat(formData.minAmountPerTransaction.toString()) : null,
+      maxAmountPerTransaction: formData.maxAmountPerTransaction ? 
+        parseFloat(formData.maxAmountPerTransaction.toString()) : null
     };
 
-    console.log('📤 Envoi création annonce:', postData);
+    // Ajouter les termes si présents
+    if (formData.terms?.trim()) {
+      postData.terms = formData.terms.trim();
+    }
+
+    // Log détaillé pour vérifier les types
+    console.log('📤 Payload final envoyé:', {
+      ...postData,
+      amount_type: typeof postData.amount,
+      price_type: typeof postData.price,
+      user_included: !!postData.user
+    });
+
+    console.log('📤 JSON stringifié:', JSON.stringify(postData));
 
     const response = await api.post('/ads', postData);
-    console.log('✅ Annonce créée:', response.data);
+    console.log('✅ Annonce créée avec succès:', response.data);
 
     setSuccess(`✅ Annonce ${formData.type === 'buy' ? 'd\'achat' : 'de vente'} créée avec succès !`);
     
@@ -373,15 +403,36 @@ const AdCreate: React.FC = () => {
     }, 2000);
 
   } catch (err: any) {
-    console.error('❌ Erreur création annonce:', err);
-    if (err.response?.data?.violations) {
+    console.error('❌ Erreur détaillée création annonce:', err);
+    
+    // Log complet pour debug
+    if (err.response) {
+      console.error('📋 Status:', err.response.status);
+      console.error('📋 Data:', err.response.data);
+      console.error('📋 Request payload:', err.response.config?.data);
+    }
+    
+    // Messages d'erreur spécifiques
+    if (err.response?.status === 400) {
+      if (err.response.data?.detail?.includes('float') || err.response.data?.detail?.includes('amount')) {
+        setError('Erreur de type : amount et price doivent être des nombres (float)');
+      } else {
+        setError(`Erreur 400: ${err.response.data?.detail || 'Requête incorrecte'}`);
+      }
+    } else if (err.response?.status === 500) {
+      if (err.response.data?.detail?.includes('user_id') || err.response.data?.detail?.includes('NOT NULL')) {
+        setError('Erreur : L\'utilisateur n\'est pas associé à l\'annonce. Problème de relation.');
+      } else {
+        setError('Erreur serveur 500. Vérifiez les logs du backend.');
+      }
+    } else if (err.response?.data?.violations) {
       const violations = err.response.data.violations;
       const errorMsg = violations.map((v: any) => `${v.propertyPath}: ${v.message}`).join(', ');
-      setError(`Erreur validation: ${errorMsg}`);
-    } else if (err.response?.data?.detail) {
-      setError(err.response.data.detail);
+      setError(`Erreurs de validation: ${errorMsg}`);
+    } else if (err.message) {
+      setError(err.message);
     } else {
-      setError(err.message || 'Erreur lors de la création');
+      setError('Erreur inconnue lors de la création');
     }
   } finally {
     setLoading(false);
