@@ -1,8 +1,4 @@
-<<<<<<< HEAD
 // src/App.tsx - VERSION COMPLÈTE ET OPTIMISÉE
-=======
-// src/App.tsx - VERSION CORRIGÉE
->>>>>>> c27e2556a6830f94cfd9b274ae439ee4a9568a88
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import PublicLayout from "./components/PublicLayout";
@@ -27,11 +23,10 @@ import HowItWorksPage from "./components/HowItWorksPage";
 import AboutPage from "./components/AboutPage";
 import ContactPage from "./components/ContactPage";
 import PrivacyPage from "./components/PrivacyPage";
-import AdEditPage from "./components/AdEditPage";
-import { Suspense } from "react";
+import { Suspense, lazy } from "react";
 
 // Composants chargés paresseusement
-//const AdEditPage = lazy(() => import("./components/AdEditPage"));
+const AdEditPage = lazy(() => import("./components/AdEditPage"));
 
 // Loader de chargement
 const LoadingSpinner = () => (
@@ -76,7 +71,6 @@ function App() {
   return (
     <AuthProvider>
       <Router>
-<<<<<<< HEAD
         <Suspense fallback={<LoadingSpinner />}>
           <Routes>
             {/* ⭐ PUBLIC ROUTES avec PublicLayout */}
@@ -146,83 +140,6 @@ function App() {
             <Route path="*" element={<Navigate to="/" />} />
           </Routes>
         </Suspense>
-=======
-        <Routes>
-          {/* ⭐ PUBLIC ROUTES avec PublicLayout */}
-          <Route path="/" element={<PublicLayout />}>
-            {/* Pages publiques principales */}
-            <Route index element={<Home />} />
-            <Route path="login" element={<Login />} />
-            <Route path="register" element={<Register />} />
-            <Route path="market" element={<PublicAdList />} />
-            <Route path="how-it-works" element={<HowItWorksPage />} />
-            <Route path="about" element={<AboutPage />} />
-            <Route path="contact" element={<ContactPage />} />
-            <Route path="privacy" element={<PrivacyPage />} />
-            
-            {/* Page 404 à l'intérieur du layout public */}
-            <Route path="*" element={<NotFound />} />
-          </Route>
-
-          {/* ⭐ PROTECTED ROUTES avec DashboardLayout */}
-          <Route path="/dashboard" element={
-            <ProtectedRoute>
-              <DashboardLayout />
-            </ProtectedRoute>
-          }>
-            {/* Dashboard Home */}
-            <Route index element={<DashboardHome />} />
-            
-            {/* ROUTES UTILISATEUR */}
-            <Route path="wallet" element={<WalletPage />} />
-            <Route path="transactions" element={<TransactionList />} />
-            <Route path="profile" element={<Profile />} />
-            
-            {/* Gestion bancaire - Pour utilisateur normal */}
-            <Route path="bank-details" element={
-              <UserRoute>
-                <UserBankDetails />
-              </UserRoute>
-            } />
-            
-            {/* Devises */}
-            <Route path="currencies" element={<Currency />} />
-            
-            {/* ANNONCES */}
-            <Route path="ads">
-              <Route index element={<AdList filter="all" />} />
-              <Route path="create" element={<UserRoute><AdCreate /></UserRoute>} />
-              <Route path="my" element={<UserRoute><AdList filter="my-ads" /></UserRoute>} />
-              <Route path="edit/:id" element={<UserRoute><AdEditPage /></UserRoute>} />
-            </Route>
-            
-            {/* ⭐ ROUTES ADMIN */}
-            <Route path="admin">
-              <Route path="users" element={<AdminRoute><UserList /></AdminRoute>} />
-              <Route path="ads" element={<AdminRoute><AdList filter="moderation" /></AdminRoute>} />
-              <Route path="analytics" element={<AdminRoute><AnalyticsPage /></AdminRoute>} />
-              
-              {/* Admin bank details - sans prop adminView */}
-              <Route path="bank-details" element={<AdminRoute><UserBankDetails /></AdminRoute>} />
-              
-              {/* Admin currencies - sans prop adminView */}
-              <Route path="currencies" element={<AdminRoute><Currency /></AdminRoute>} />
-            </Route>
-            
-            {/* 404 dans dashboard */}
-            <Route path="*" element={
-              <div className="container-fluid py-4">
-                <h1>404 - Page non trouvée</h1>
-                <p>Cette page n'existe pas dans le dashboard.</p>
-              </div>
-            } />
-          </Route>
-
-          {/* Fallback global 404 */}
-          <Route path="*" element={<Navigate to="/" />} />
-          
-        </Routes>
->>>>>>> c27e2556a6830f94cfd9b274ae439ee4a9568a88
       </Router>
     </AuthProvider>
   );
