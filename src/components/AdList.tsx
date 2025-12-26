@@ -1,4 +1,4 @@
-// src/components/AdList.tsx - VERSION COMPLÈTE ET OPTIMISÉE
+// src/components/AdList.tsx - VERSION CORRIGÉE
 import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { Link, useNavigate } from 'react-router-dom';
@@ -10,6 +10,7 @@ interface User {
   reputation: number;
   email?: string;
   phone?: string;
+  avatar?: string;
 }
 
 interface Currency {
@@ -81,6 +82,8 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
     if (data?.member && Array.isArray(data.member)) return data.member;
     if (data?.['hydra:member'] && Array.isArray(data['hydra:member'])) return data['hydra:member'];
     if (Array.isArray(data)) return data;
+    if (data?.data && Array.isArray(data.data)) return data.data;
+    if (data?.items && Array.isArray(data.items)) return data.items;
     return [];
   }, []);
 
@@ -224,6 +227,10 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
         const { isExpired, expiresAt } = calculateExpiration(ad);
         const finalStatus = isExpired ? 'expired' : (ad.status || 'active');
         
+        // Formater l'utilisateur correctement
+        const userData = ad.user || {};
+        const phone = userData.phone || userData.phoneNumber || userData.telephone || '';
+        
         return {
           id: ad.id,
           '@id': ad['@id'],
@@ -233,7 +240,14 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
           currency: ad.currency || { id: 0, code: 'USDT', name: 'Tether USD', type: 'crypto' },
           status: finalStatus,
           paymentMethod: ad.paymentMethod || 'Non spécifié',
-          user: ad.user || { id: 0, fullName: 'Utilisateur', reputation: 5.0 },
+          user: {
+            id: userData.id || 0,
+            fullName: userData.fullName || userData.full_name || userData.name || 'Utilisateur',
+            reputation: parseFloat(userData.reputation) || 5.0,
+            email: userData.email || '',
+            phone: phone,
+            avatar: userData.avatar || userData.profileImage || ''
+          },
           createdAt: ad.createdAt || new Date().toISOString(),
           updatedAt: ad.updatedAt,
           minAmountPerTransaction: ad.minAmountPerTransaction ? parseFloat(ad.minAmountPerTransaction) : undefined,
@@ -325,8 +339,10 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
       for (const endpoint of endpoints) {
         try {
           response = await api.post(endpoint, transactionData);
+          console.log(`✅ Transaction créée via ${endpoint}`);
           break;
-        } catch (err) {
+        } catch (err: any) {
+          console.log(`❌ ${endpoint} échoué:`, err.response?.status || err.message);
           continue;
         }
       }
@@ -341,8 +357,14 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
         `✅ Transaction créée !\nID: ${transaction.id}\nRedirection vers la page de paiement...`
       );
       
+      // Rediriger vers la messagerie avec la nouvelle transaction
       setTimeout(() => {
-        navigate(`/dashboard/transactions/${transaction.id}`);
+        navigate('/dashboard/messages', { 
+          state: { 
+            transactionId: transaction.id,
+            autoFocus: true
+          }
+        });
       }, 2000);
 
     } catch (err: any) {
@@ -469,7 +491,7 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
   };
 
   // ============================================
-  // FONCTIONS DE MESSAGERIE
+  // FONCTIONS DE MESSAGERIE - CORRIGÉES
   // ============================================
 
   const handleContactSeller = (ad: Ad) => {
@@ -484,23 +506,84 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
       return;
     }
 
-    navigate('/dashboard/messages', { 
-      state: { 
-        recipientId: ad.user.id,
-        recipientName: ad.user.fullName,
-        adId: ad.id,
-        adTitle: `${ad.type === 'buy' ? 'Achat' : 'Vente'} de ${ad.amount} ${ad.currency.code}`,
-        adAmount: ad.amount,
-        adCurrency: ad.currency.code,
-        adPrice: ad.price
-      }
-    });
+    // Créer d'abord une transaction
+    handleBuyAd(ad);
   };
 
+  // FONCTION WHATSAPP CORRIGÉE
   const handleWhatsAppContact = (ad: Ad) => {
+    // Vérifier si l'annonce a un utilisateur avec un numéro
+    const userPhone = ad.user?.phone;
+    
+    if (!userPhone) {
+      showNotification('warning', 'Aucun numéro WhatsApp disponible pour ce vendeur');
+      return;
+    }
+    
+    // Nettoyer le numéro de téléphone
+    const cleanPhone = userPhone
+      .replace(/\s+/g, '') // Enlever les espaces
+      .replace(/^\+?212/, '212') // Standardiser le code pays
+      .replace(/^0/, '212'); // Remplacer 0 par 212
+    
+    console.log('📱 Numéro WhatsApp nettoyé:', cleanPhone);
+    
+    // Créer le message
     const message = `Bonjour ${ad.user.fullName},\n\nJe suis intéressé par votre annonce #${ad.id} :\n• ${ad.type === 'buy' ? 'Achat' : 'Vente'} de ${ad.amount} ${ad.currency.code}\n• Prix : ${ad.price} MAD/${ad.currency.code}\n• Total : ${calculateTotal(ad).toLocaleString('fr-MA')} MAD\n\nPouvez-vous me contacter pour discuter de cette transaction ?\n\nCordialement.`;
     
-    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer');
+    // Construire l'URL WhatsApp
+    const encodedMessage = encodeURIComponent(message);
+    const whatsappUrl = `https://wa.me/${cleanPhone}?text=${encodedMessage}`;
+    
+    console.log('🔗 URL WhatsApp:', whatsappUrl);
+    
+    // Ouvrir WhatsApp dans un nouvel onglet
+    window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  // ============================================
+  // FONCTIONS POUR CRÉER UNE TRANSACTION RAPIDE
+  // ============================================
+
+  const createQuickTransaction = async (ad: Ad) => {
+    if (!isAuthenticated || !user) {
+      showNotification('warning', 'Connectez-vous pour créer une transaction !');
+      navigate('/login', { state: { from: '/dashboard/ads' } });
+      return;
+    }
+
+    try {
+      const transactionData = {
+        ad: `/api/ads/${ad.id}`,
+        buyer: ad.type === 'sell' ? `/api/users/${user.id}` : `/api/users/${ad.user.id}`,
+        seller: ad.type === 'sell' ? `/api/users/${ad.user.id}` : `/api/users/${user.id}`,
+        usdtAmount: ad.amount,
+        fiatAmount: calculateTotal(ad),
+        status: 'pending'
+      };
+
+      console.log('🔄 Création transaction rapide:', transactionData);
+
+      const response = await api.post('/transactions', transactionData);
+      
+      if (response.data) {
+        showNotification('success', '✅ Transaction créée avec succès !');
+        
+        // Rediriger vers la messagerie
+        setTimeout(() => {
+          navigate('/dashboard/messages', { 
+            state: { 
+              transactionId: response.data.id,
+              autoFocus: true
+            }
+          });
+        }, 1000);
+      }
+      
+    } catch (err: any) {
+      console.error('❌ Erreur création transaction:', err);
+      showNotification('error', 'Erreur lors de la création de la transaction');
+    }
   };
 
   // ============================================
@@ -892,9 +975,16 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
                             {ad.user?.fullName || 'Utilisateur'}
                             {isUserAd && <span className="badge bg-info ms-2">Vous</span>}
                           </div>
-                          <small className="text-warning">
-                            ⭐ {ad.user?.reputation?.toFixed(1) || '5.0'}
-                          </small>
+                          <div className="small">
+                            <span className="text-warning">
+                              ⭐ {ad.user?.reputation?.toFixed(1) || '5.0'}
+                            </span>
+                            {ad.user?.phone && (
+                              <span className="ms-2 text-success">
+                                <i className="bi bi-whatsapp"></i> Disponible
+                              </span>
+                            )}
+                          </div>
                         </div>
                         <div className="text-end">
                           <small className="text-muted d-block">ID Annonce</small>
@@ -1048,20 +1138,29 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
                           </>
                         )}
                         
-                        {/* Bouton Contact pour toutes les annonces (sauf les siennes) */}
+                        {/* Boutons Contact pour toutes les annonces (sauf les siennes) */}
                         {isAuthenticated && !isUserAd && filter === 'all' && (
                           <div className="d-flex gap-1">
                             <button 
                               className="btn btn-outline-primary btn-sm"
                               onClick={() => handleContactSeller(ad)}
-                              title="Envoyer un message"
+                              title="Créer une transaction et discuter"
+                              disabled={isTransactionActive}
                             >
-                              <i className="bi bi-chat"></i>
+                              {isTransactionActive ? (
+                                <span className="spinner-border spinner-border-sm"></span>
+                              ) : (
+                                <>
+                                  <i className="bi bi-chat me-1"></i>
+                                  Discuter
+                                </>
+                              )}
                             </button>
                             <button 
                               className="btn btn-outline-success btn-sm"
                               onClick={() => handleWhatsAppContact(ad)}
                               title="Contacter sur WhatsApp"
+                              disabled={!ad.user?.phone}
                             >
                               <i className="bi bi-whatsapp"></i>
                             </button>
