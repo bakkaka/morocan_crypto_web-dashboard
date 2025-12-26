@@ -1,4 +1,4 @@
-// src/components/MessagesPage.tsx - VERSION CORRIGÉE ET OPTIMISÉE
+// src/components/MessagesPage.tsx - VERSION CORRIGÉE
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -72,13 +72,6 @@ const MessagesPage: React.FC = () => {
   // Charger les transactions au montage
   useEffect(() => {
     loadTransactions();
-    
-    // Rafraîchir toutes les 30 secondes
-    const interval = setInterval(() => {
-      loadTransactions(true); // Rafraîchissement silencieux
-    }, 30000);
-    
-    return () => clearInterval(interval);
   }, []);
 
   // Charger les messages quand une transaction est sélectionnée
@@ -90,15 +83,6 @@ const MessagesPage: React.FC = () => {
           inputRef.current?.focus();
         }, 300);
       }
-      
-      // Rafraîchir les messages toutes les 10 secondes
-      const messageInterval = setInterval(() => {
-        if (selectedTransaction) {
-          loadMessages(selectedTransaction, true);
-        }
-      }, 10000);
-      
-      return () => clearInterval(messageInterval);
     }
   }, [selectedTransaction, autoFocus]);
 
@@ -121,127 +105,124 @@ const MessagesPage: React.FC = () => {
   }, []);
 
   // Fonction pour charger les transactions
-  const loadTransactions = async (silent: boolean = false) => {
+  const loadTransactions = async () => {
     if (!user) {
       setTransactions([]);
+      setLoading(false);
       return;
     }
     
     try {
-      if (!silent) setLoading(true);
+      setLoading(true);
       
-      // Essayer les endpoints dans l'ordre (sans /api d'abord)
+      console.log(`🔍 Chargement transactions pour utilisateur ID: ${user.id}`);
+      
+      // Essayer différents endpoints comme dans vos autres fichiers
       const endpoints = [
-        `/transactions?buyer.id=${user.id}`,
-        `/transactions?seller.id=${user.id}`,
-        `/transactions`,
-        `/api/transactions?buyer.id=${user.id}`,  // Backup avec /api
-        `/api/transactions?seller.id=${user.id}`,
-        `/api/transactions`
+        `/transactions?buyer.id=${user.id}&order[createdAt]=desc`,
+        `/transactions?seller.id=${user.id}&order[createdAt]=desc`,
+        `/transactions?user=${user.id}&order[createdAt]=desc`,
+        `/transactions?order[createdAt]=desc`
       ];
 
       let response = null;
       
       for (const endpoint of endpoints) {
         try {
+          console.log(`🔄 Tentative: ${endpoint}`);
           response = await api.get(endpoint);
-          console.log('✅ Transactions chargées depuis:', endpoint);
+          console.log(`✅ Succès avec: ${endpoint}`);
           break;
         } catch (err: any) {
-          if (!silent) {
-            console.log(`⚠️ ${endpoint} échoué:`, err.message);
-          }
+          console.log(`❌ Échec ${endpoint}:`, err.message);
           continue;
         }
       }
 
       if (!response) {
-        if (!silent) {
-          console.warn('⚠️ Aucune transaction trouvée');
-        }
+        console.warn('⚠️ Aucun endpoint transaction ne fonctionne');
         setTransactions([]);
         return;
       }
 
       const data = extractHydraMember(response.data);
-      
-      // Filtrer les transactions où l'utilisateur est impliqué
-      const userTransactions = data.filter((transaction: any) => {
-        if (!transaction.buyer || !transaction.seller) return false;
-        
-        const buyerId = typeof transaction.buyer === 'object' 
-          ? transaction.buyer.id 
-          : transaction.buyer;
-        
-        const sellerId = typeof transaction.seller === 'object' 
-          ? transaction.seller.id 
-          : transaction.seller;
-        
-        return buyerId === user.id || sellerId === user.id;
-      });
-
-      console.log(`📊 ${userTransactions.length} transactions trouvées`);
+      console.log(`📊 Transactions brutes:`, data);
       
       // Formater les transactions
-      const formattedTransactions: Transaction[] = userTransactions.map((tx: any) => {
-        // Fonction pour formater un utilisateur
-        const formatUser = (userData: any, defaultName: string): User => {
-          if (!userData) {
+      const formattedTransactions: Transaction[] = data
+        .filter((tx: any) => {
+          if (!tx.buyer || !tx.seller) return false;
+          
+          // Vérifier si l'utilisateur est impliqué
+          const buyerId = typeof tx.buyer === 'object' ? tx.buyer.id : tx.buyer;
+          const sellerId = typeof tx.seller === 'object' ? tx.seller.id : tx.seller;
+          
+          const isUserInvolved = buyerId === user.id || sellerId === user.id;
+          console.log(`Transaction ${tx.id}: user=${user.id}, buyer=${buyerId}, seller=${sellerId}, involved=${isUserInvolved}`);
+          
+          return isUserInvolved;
+        })
+        .map((tx: any) => {
+          console.log(`📋 Traitement transaction ${tx.id}:`, tx);
+          
+          // Fonction pour formater un utilisateur
+          const formatUser = (userData: any, defaultName: string): User => {
+            if (!userData) {
+              return { 
+                id: 0, 
+                fullName: defaultName, 
+                email: '',
+                avatar: ''
+              };
+            }
+            
+            if (typeof userData === 'object') {
+              return {
+                id: userData.id || 0,
+                fullName: userData.fullName || userData.full_name || userData.name || defaultName,
+                username: userData.username,
+                email: userData.email || '',
+                avatar: userData.avatar || userData.profileImage || ''
+              };
+            }
+            
             return { 
               id: 0, 
               fullName: defaultName, 
               email: '',
               avatar: ''
             };
-          }
-          
-          if (typeof userData === 'object') {
-            return {
-              id: userData.id || 0,
-              fullName: userData.fullName || userData.full_name || userData.name || defaultName,
-              username: userData.username,
-              email: userData.email || '',
-              avatar: userData.avatar || userData.profileImage || ''
-            };
-          }
-          
-          return { 
-            id: 0, 
-            fullName: defaultName, 
-            email: '',
-            avatar: ''
           };
-        };
-        
-        // Formater l'annonce
-        const adData = tx.ad || {};
-        const currencyCode = adData.currency?.code || 
-                           adData.cryptoCurrency?.code || 
-                           'USDT';
-        
-        return {
-          id: tx.id,
-          usdtAmount: parseFloat(tx.usdtAmount) || parseFloat(tx.amount) || 0,
-          fiatAmount: parseFloat(tx.fiatAmount) || parseFloat(tx.localAmount) || 0,
-          status: tx.status || 'pending',
-          buyer: formatUser(tx.buyer, 'Acheteur'),
-          seller: formatUser(tx.seller, 'Vendeur'),
-          ad: {
-            id: adData.id || 0,
-            type: adData.type || 'buy',
-            currency: {
-              code: currencyCode
+          
+          // Formater l'annonce
+          const adData = tx.ad || {};
+          const currencyCode = adData.currency?.code || 'USDT';
+          
+          return {
+            id: tx.id,
+            usdtAmount: parseFloat(tx.usdtAmount) || parseFloat(tx.amount) || 0,
+            fiatAmount: parseFloat(tx.fiatAmount) || parseFloat(tx.localAmount) || 0,
+            status: tx.status || 'pending',
+            buyer: formatUser(tx.buyer, 'Acheteur'),
+            seller: formatUser(tx.seller, 'Vendeur'),
+            ad: {
+              id: adData.id || 0,
+              type: adData.type || 'buy',
+              currency: {
+                code: currencyCode
+              },
+              title: adData.title || `Transaction ${tx.id}`
             },
-            title: adData.title || `Transaction ${tx.id}`
-          },
-          createdAt: tx.createdAt || tx.created_at || new Date().toISOString(),
-          updatedAt: tx.updatedAt || tx.updated_at || new Date().toISOString()
-        };
-      }).filter((tx: Transaction) => tx.id > 0)
+            createdAt: tx.createdAt || tx.created_at || new Date().toISOString(),
+            updatedAt: tx.updatedAt || tx.updated_at || new Date().toISOString()
+          };
+        })
+        .filter((tx: Transaction) => tx.id > 0)
         .sort((a: Transaction, b: Transaction) => 
           new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
         );
 
+      console.log(`📊 ${formattedTransactions.length} transactions formatées:`, formattedTransactions);
       setTransactions(formattedTransactions);
       setLastUpdated(new Date());
       
@@ -257,56 +238,53 @@ const MessagesPage: React.FC = () => {
       }
       
     } catch (error: any) {
-      if (!silent) {
-        console.error('❌ Erreur chargement transactions:', error);
-        alert('Erreur lors du chargement des transactions. Veuillez réessayer.');
-      }
+      console.error('❌ Erreur chargement transactions:', error);
+      alert('Erreur lors du chargement des transactions. Veuillez réessayer.');
       setTransactions([]);
     } finally {
-      if (!silent) setLoading(false);
+      setLoading(false);
     }
   };
 
   // Fonction pour charger les messages
-  const loadMessages = async (transactionId: number, silent: boolean = false) => {
+  const loadMessages = async (transactionId: number) => {
     if (!transactionId) return;
     
     try {
-      if (!silent) setMessageLoading(true);
+      setMessageLoading(true);
       
-      // Essayer différents endpoints (sans /api d'abord)
+      console.log(`🔍 Chargement messages pour transaction ${transactionId}`);
+      
+      // Essayer différents endpoints comme dans vos autres fichiers
       const endpoints = [
         `/chat_messages?transaction.id=${transactionId}&order[createdAt]=asc`,
-        `/chat_messages?transaction=${transactionId}&order=asc`,
-        `/messages?transaction.id=${transactionId}`,
-        `/api/chat_messages?transaction.id=${transactionId}&order[createdAt]=asc`,  // Backup
-        `/api/messages?transaction=${transactionId}`
+        `/chat_messages?transaction=${transactionId}&order[createdAt]=asc`,
+        `/messages?transaction.id=${transactionId}&order[createdAt]=asc`,
+        `/messages?transaction=${transactionId}`
       ];
 
       let response = null;
       
       for (const endpoint of endpoints) {
         try {
+          console.log(`🔄 Tentative: ${endpoint}`);
           response = await api.get(endpoint);
-          console.log('✅ Messages chargés depuis:', endpoint);
+          console.log(`✅ Succès avec: ${endpoint}`);
           break;
         } catch (err: any) {
-          if (!silent) {
-            console.log(`⚠️ ${endpoint} échoué:`, err.message);
-          }
+          console.log(`❌ Échec ${endpoint}:`, err.message);
           continue;
         }
       }
 
       if (!response) {
-        if (!silent) {
-          console.warn('⚠️ Aucun message trouvé pour cette transaction');
-        }
+        console.warn('⚠️ Aucun endpoint message ne fonctionne');
         setMessages([]);
         return;
       }
 
       const data = extractHydraMember(response.data);
+      console.log(`📨 Messages bruts pour transaction ${transactionId}:`, data);
       
       // Formater les messages
       const formattedMessages: Message[] = data.map((msg: any) => {
@@ -344,73 +322,64 @@ const MessagesPage: React.FC = () => {
         new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
       );
 
+      console.log(`📨 ${formattedMessages.length} messages formatés`);
       setMessages(formattedMessages);
       
     } catch (error: any) {
-      if (!silent) {
-        console.error('❌ Erreur chargement messages:', error);
-      }
+      console.error('❌ Erreur chargement messages:', error);
       setMessages([]);
     } finally {
-      if (!silent) setMessageLoading(false);
+      setMessageLoading(false);
     }
   };
 
-  // Fonction pour envoyer un message
+  // Fonction pour envoyer un message - CORRIGÉE AVEC LE BON FORMAT
   const sendMessage = async () => {
     if (!newMessage.trim() || !selectedTransaction || !user || sending) return;
     
     try {
       setSending(true);
       
-      // Préparer les données du message
-      const messageData: any = {
+      console.log(`📤 Envoi message pour transaction ${selectedTransaction}`);
+      console.log(`👤 Utilisateur ID: ${user.id}`);
+      
+      // FORMAT CORRECT comme dans vos autres fichiers
+      const messageData = {
         message: newMessage.trim(),
-        transactionId: selectedTransaction,
-        senderId: user.id
+        transaction: `/api/transactions/${selectedTransaction}`,
+        sender: `/api/users/${user.id}`
       };
       
-      // Essayer différents formats de données pour différents backends
-      const dataFormats = [
-        {
-          transaction: `/transactions/${selectedTransaction}`,
-          sender: `/users/${user.id}`,
-          message: newMessage.trim()
-        },
-        {
-          transactionId: selectedTransaction,
-          senderId: user.id,
-          content: newMessage.trim()
-        },
-        {
-          transaction: `/api/transactions/${selectedTransaction}`,
-          sender: `/api/users/${user.id}`,
-          message: newMessage.trim()
-        }
-      ];
+      console.log('📦 Données message:', messageData);
       
-      // Essayer différents endpoints
+      // Essayer différents endpoints comme dans vos autres fichiers
       const endpoints = [
-        '/chat_messages',
-        '/messages',
         '/api/chat_messages',
-        '/api/messages'
+        '/chat_messages',
+        '/api/messages',
+        '/messages'
       ];
       
       let response = null;
       let lastError = null;
       
-      outerLoop: for (const endpoint of endpoints) {
-        for (const dataFormat of dataFormats) {
-          try {
-            console.log(`🔄 Tentative d'envoi via ${endpoint}`, dataFormat);
-            response = await api.post(endpoint, dataFormat);
-            console.log('✅ Message envoyé via:', endpoint);
-            break outerLoop;
-          } catch (err: any) {
-            lastError = err;
-            console.log(`⚠️ ${endpoint} avec format échoué:`, err.message);
+      for (const endpoint of endpoints) {
+        try {
+          console.log(`🔄 Tentative d'envoi via ${endpoint}`);
+          response = await api.post(endpoint, messageData);
+          console.log(`✅ Message envoyé via: ${endpoint}`);
+          console.log('📦 Réponse:', response.data);
+          break;
+        } catch (err: any) {
+          lastError = err;
+          console.log(`❌ ${endpoint} échoué:`, err.message);
+          if (err.response) {
+            console.log('📋 Détails erreur:', {
+              status: err.response.status,
+              data: err.response.data
+            });
           }
+          continue;
         }
       }
       
@@ -425,7 +394,7 @@ const MessagesPage: React.FC = () => {
           id: user.id,
           fullName: user.fullName || 'Vous',
           email: user.email || '',
-          //avatar: user.avatar
+          avatar: (user as any).avatar || '' // Correction ici
         },
         message: newMessage.trim(),
         createdAt: new Date().toISOString(),
@@ -433,11 +402,12 @@ const MessagesPage: React.FC = () => {
         isRead: true
       };
       
+      console.log('💾 Message temporaire ajouté:', tempMessage);
       setMessages(prev => [...prev, tempMessage]);
       setNewMessage('');
       
       // Recharger les messages depuis le serveur
-      await loadMessages(selectedTransaction, true);
+      await loadMessages(selectedTransaction);
       
       // Focus sur l'input
       if (inputRef.current) {
