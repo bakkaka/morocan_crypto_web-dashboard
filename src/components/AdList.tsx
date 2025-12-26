@@ -1,4 +1,4 @@
-// src/components/AdList.tsx - VERSION CORRIGÉE
+// src/components/AdList.tsx - VERSION AVEC BOUTONS FONCTIONNELS
 import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { Link, useNavigate } from 'react-router-dom';
@@ -79,8 +79,7 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
   // ============================================
 
   const extractHydraMember = useCallback((data: any): any[] => {
-    if (data?.member && Array.isArray(data.member)) return data.member;
-    if (data?.['hydra:member'] && Array.isArray(data['hydra:member'])) return data['hydra:member'];
+    if (data?.['hydra:member']) return data['hydra:member'];
     if (Array.isArray(data)) return data;
     if (data?.data && Array.isArray(data.data)) return data.data;
     if (data?.items && Array.isArray(data.items)) return data.items;
@@ -148,7 +147,7 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
   };
 
   // ============================================
-  // FONCTION D'EXPIRATION - CRITIQUE
+  // FONCTION D'EXPIRATION
   // ============================================
 
   const calculateExpiration = (ad: any): { isExpired: boolean; expiresAt: Date | null } => {
@@ -222,12 +221,12 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
       
       console.log('✅ Annonces chargées:', adsData.length);
 
-      // Traitement des annonces avec calcul d'expiration
+      // Traitement des annonces
       const formattedAds: Ad[] = adsData.map((ad: any) => {
         const { isExpired, expiresAt } = calculateExpiration(ad);
         const finalStatus = isExpired ? 'expired' : (ad.status || 'active');
         
-        // Formater l'utilisateur correctement
+        // Formater l'utilisateur
         const userData = ad.user || {};
         const phone = userData.phone || userData.phoneNumber || userData.telephone || '';
         
@@ -273,7 +272,7 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
   useEffect(() => {
     loadAds();
     
-    // Rafraîchir automatiquement toutes les minutes pour l'expiration
+    // Rafraîchir automatiquement toutes les minutes
     const interval = setInterval(() => {
       if (filter === 'all' || filter === 'my-ads') {
         loadAds();
@@ -284,7 +283,7 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
   }, [loadAds, filter]);
 
   // ============================================
-  // FONCTIONS DE TRANSACTION
+  // FONCTIONS DE TRANSACTION SIMPLIFIÉES
   // ============================================
 
   const handleBuyAd = async (ad: Ad) => {
@@ -309,21 +308,11 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
       return;
     }
 
-    const actionType = ad.type === 'sell' ? 'l\'achat' : 'la vente';
-    if (!window.confirm(
-      `Confirmer ${actionType} de ${ad.amount} ${ad.currency.code} à ${ad.price} MAD ?\n\n` +
-      `Total: ${calculateTotal(ad).toLocaleString('fr-MA')} MAD\n` +
-      `${ad.type === 'sell' ? 'Vendeur' : 'Acheteur'}: ${ad.user.fullName}\n` +
-      `Méthode: ${ad.paymentMethod}`
-    )) {
-      return;
-    }
-
     try {
       setActiveTransactions(prev => new Set(prev).add(ad.id));
       
       const transactionData: TransactionData = {
-        ad: ad['@id'] || `/api/ads/${ad.id}`,
+        ad: `/api/ads/${ad.id}`,
         buyer: ad.type === 'sell' ? `/api/users/${user.id}` : `/api/users/${ad.user.id}`,
         seller: ad.type === 'sell' ? `/api/users/${ad.user.id}` : `/api/users/${user.id}`,
         usdtAmount: ad.amount,
@@ -333,13 +322,14 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
 
       console.log('🔄 Création de transaction:', transactionData);
 
-      const endpoints = ['/api/transactions', '/transactions'];
+      const endpoints = ['/transactions', '/api/transactions'];
       let response = null;
       
       for (const endpoint of endpoints) {
         try {
+          console.log(`🔄 Tentative POST: ${endpoint}`);
           response = await api.post(endpoint, transactionData);
-          console.log(`✅ Transaction créée via ${endpoint}`);
+          console.log(`✅ Transaction créée via ${endpoint}`, response.data);
           break;
         } catch (err: any) {
           console.log(`❌ ${endpoint} échoué:`, err.response?.status || err.message);
@@ -353,11 +343,9 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
 
       const transaction = response.data;
       
-      showNotification('success', 
-        `✅ Transaction créée !\nID: ${transaction.id}\nRedirection vers la page de paiement...`
-      );
+      showNotification('success', `✅ Transaction créée ! ID: ${transaction.id}`);
       
-      // Rediriger vers la messagerie avec la nouvelle transaction
+      // Rediriger vers la messagerie
       setTimeout(() => {
         navigate('/dashboard/messages', { 
           state: { 
@@ -365,7 +353,7 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
             autoFocus: true
           }
         });
-      }, 2000);
+      }, 1000);
 
     } catch (err: any) {
       console.error('❌ Erreur création transaction:', err);
@@ -377,8 +365,6 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
       if (err.response?.status === 404) errorMessage = 'Annonce non trouvée';
       if (err.response?.status === 409) errorMessage = 'Transaction déjà existante';
       if (err.code === 'ERR_NETWORK') errorMessage = 'Erreur de connexion';
-      if (err.response?.data?.detail) errorMessage = err.response.data.detail;
-      if (err.response?.data?.message) errorMessage = err.response.data.message;
       
       showNotification('error', errorMessage);
       
@@ -444,7 +430,6 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
       let errorMessage = `Erreur lors de l'action ${action}`;
       if (err.response?.status === 404) errorMessage = 'Annonce non trouvée';
       if (err.response?.status === 403) errorMessage = 'Permission refusée';
-      if (err.response?.data?.detail) errorMessage = err.response.data.detail;
       
       showNotification('error', errorMessage);
     } finally {
@@ -491,7 +476,7 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
   };
 
   // ============================================
-  // FONCTIONS DE MESSAGERIE - CORRIGÉES
+  // FONCTIONS DE CONTACT - SIMPLIFIÉES ET FONCTIONNELLES
   // ============================================
 
   const handleContactSeller = (ad: Ad) => {
@@ -506,84 +491,58 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
       return;
     }
 
-    // Créer d'abord une transaction
+    // SIMPLE: Créer une transaction rapide sans confirmation
     handleBuyAd(ad);
   };
 
-  // FONCTION WHATSAPP CORRIGÉE
+  // FONCTION WHATSAPP - SIMPLIFIÉE ET FONCTIONNELLE
   const handleWhatsAppContact = (ad: Ad) => {
-    // Vérifier si l'annonce a un utilisateur avec un numéro
-    const userPhone = ad.user?.phone;
+    // SIMPLE: Toujours ouvrir WhatsApp, même sans numéro
+    const userPhone = ad.user?.phone || '';
     
-    if (!userPhone) {
-      showNotification('warning', 'Aucun numéro WhatsApp disponible pour ce vendeur');
-      return;
-    }
-    
-    // Nettoyer le numéro de téléphone
-    const cleanPhone = userPhone
-      .replace(/\s+/g, '') // Enlever les espaces
-      .replace(/^\+?212/, '212') // Standardiser le code pays
-      .replace(/^0/, '212'); // Remplacer 0 par 212
-    
-    console.log('📱 Numéro WhatsApp nettoyé:', cleanPhone);
-    
-    // Créer le message
+    // Message standard
     const message = `Bonjour ${ad.user.fullName},\n\nJe suis intéressé par votre annonce #${ad.id} :\n• ${ad.type === 'buy' ? 'Achat' : 'Vente'} de ${ad.amount} ${ad.currency.code}\n• Prix : ${ad.price} MAD/${ad.currency.code}\n• Total : ${calculateTotal(ad).toLocaleString('fr-MA')} MAD\n\nPouvez-vous me contacter pour discuter de cette transaction ?\n\nCordialement.`;
     
-    // Construire l'URL WhatsApp
-    const encodedMessage = encodeURIComponent(message);
-    const whatsappUrl = `https://wa.me/${cleanPhone}?text=${encodedMessage}`;
+    let whatsappUrl = '';
     
-    console.log('🔗 URL WhatsApp:', whatsappUrl);
+    if (userPhone) {
+      // Nettoyer le numéro
+      const cleanPhone = userPhone
+        .replace(/\s+/g, '')
+        .replace(/^\+?212/, '212')
+        .replace(/^0/, '212');
+      
+      whatsappUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
+    } else {
+      // Si pas de numéro, ouvrir WhatsApp sans numéro
+      whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
+    }
     
-    // Ouvrir WhatsApp dans un nouvel onglet
+    console.log('🔗 Ouverture WhatsApp:', whatsappUrl);
     window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
   };
 
   // ============================================
-  // FONCTIONS POUR CRÉER UNE TRANSACTION RAPIDE
+  // FONCTION POUR OUVRIR DIRECTEMENT LA MESSAGERIE
   // ============================================
 
-  const createQuickTransaction = async (ad: Ad) => {
-    if (!isAuthenticated || !user) {
-      showNotification('warning', 'Connectez-vous pour créer une transaction !');
+  const openDirectMessage = (ad: Ad) => {
+    if (!isAuthenticated) {
+      showNotification('warning', 'Connectez-vous pour envoyer un message !');
       navigate('/login', { state: { from: '/dashboard/ads' } });
       return;
     }
 
-    try {
-      const transactionData = {
-        ad: `/api/ads/${ad.id}`,
-        buyer: ad.type === 'sell' ? `/api/users/${user.id}` : `/api/users/${ad.user.id}`,
-        seller: ad.type === 'sell' ? `/api/users/${ad.user.id}` : `/api/users/${user.id}`,
-        usdtAmount: ad.amount,
-        fiatAmount: calculateTotal(ad),
-        status: 'pending'
-      };
-
-      console.log('🔄 Création transaction rapide:', transactionData);
-
-      const response = await api.post('/transactions', transactionData);
-      
-      if (response.data) {
-        showNotification('success', '✅ Transaction créée avec succès !');
-        
-        // Rediriger vers la messagerie
-        setTimeout(() => {
-          navigate('/dashboard/messages', { 
-            state: { 
-              transactionId: response.data.id,
-              autoFocus: true
-            }
-          });
-        }, 1000);
+    // Rediriger directement vers la messagerie
+    navigate('/dashboard/messages', { 
+      state: { 
+        recipientId: ad.user.id,
+        recipientName: ad.user.fullName,
+        adId: ad.id,
+        adTitle: `${ad.type === 'buy' ? 'Achat' : 'Vente'} de ${ad.amount} ${ad.currency.code}`,
+        autoFocus: true
       }
-      
-    } catch (err: any) {
-      console.error('❌ Erreur création transaction:', err);
-      showNotification('error', 'Erreur lors de la création de la transaction');
-    }
+    });
   };
 
   // ============================================
@@ -981,7 +940,7 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
                             </span>
                             {ad.user?.phone && (
                               <span className="ms-2 text-success">
-                                <i className="bi bi-whatsapp"></i> Disponible
+                                <i className="bi bi-telephone me-1"></i> {ad.user.phone}
                               </span>
                             )}
                           </div>
@@ -993,16 +952,15 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
                       </div>
                     </div>
                     
-                    {/* Pied de carte - BOUTONS D'ACTION */}
+                    {/* Pied de carte - BOUTONS D'ACTION FONCTIONNELS */}
                     <div className="card-footer bg-transparent">
                       <div className="d-flex flex-wrap gap-2">
-                        {/* Bouton Acheter/Vendre pour marketplace */}
+                        {/* Bouton Acheter/Vendre - TOUJOURS ACTIF */}
                         {filter === 'all' && isActiveAndNotExpired && !isUserAd && isAuthenticated && (
                           <button 
                             className={`btn btn-sm flex-fill ${isSellAd ? 'btn-success' : 'btn-warning'}`}
                             onClick={() => handleBuyAd(ad)}
-                            disabled={isTransactionActive || isAdModifying}
-                            title={isSellAd ? `Acheter ${ad.amount} ${ad.currency.code}` : `Vendre ${ad.amount} ${ad.currency.code}`}
+                            disabled={isTransactionActive}
                           >
                             {isTransactionActive ? (
                               <>
@@ -1013,8 +971,6 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
                               <>
                                 <i className={`bi ${isSellAd ? 'bi-cart-check' : 'bi-cash'} me-1`}></i>
                                 {isSellAd ? 'Acheter maintenant' : 'Vendre maintenant'}
-                                <br />
-                                <small className="opacity-75">{calculateTotal(ad).toLocaleString('fr-MA')} MAD</small>
                               </>
                             )}
                           </button>
@@ -1027,7 +983,6 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
                               <button 
                                 className="btn btn-outline-warning btn-sm"
                                 onClick={() => handleToggleStatus(ad.id, ad.status)}
-                                title="Mettre en pause"
                                 disabled={isAdModifying}
                               >
                                 {isAdModifying ? (
@@ -1041,7 +996,6 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
                               <button 
                                 className="btn btn-outline-success btn-sm"
                                 onClick={() => handleToggleStatus(ad.id, ad.status)}
-                                title="Activer"
                                 disabled={isAdModifying}
                               >
                                 {isAdModifying ? (
@@ -1054,7 +1008,6 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
                             <button 
                               className="btn btn-outline-info btn-sm"
                               onClick={() => navigate(`/dashboard/ads/edit/${ad.id}`)}
-                              title="Modifier"
                               disabled={isAdModifying}
                             >
                               <i className="bi bi-pencil"></i>
@@ -1062,7 +1015,6 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
                             <button 
                               className="btn btn-outline-danger btn-sm"
                               onClick={() => handleDeleteAd(ad.id)}
-                              title="Supprimer"
                               disabled={isAdModifying}
                             >
                               {isAdModifying ? (
@@ -1074,7 +1026,7 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
                           </>
                         )}
                         
-                        {/* Boutons de modération pour admin */}
+                        {/* Boutons de modération */}
                         {filter === 'moderation' && isAdmin && (
                           <>
                             <button 
@@ -1104,7 +1056,7 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
                           </>
                         )}
                         
-                        {/* Boutons admin sur toutes les annonces */}
+                        {/* Boutons admin */}
                         {isAdmin && filter !== 'moderation' && (
                           <>
                             {ad.status !== 'active' && ad.status !== 'expired' && (
@@ -1112,7 +1064,6 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
                                 className="btn btn-outline-success btn-sm"
                                 onClick={() => handleAdminAction(ad.id, 'activate')}
                                 disabled={isAdModifying}
-                                title="Activer"
                               >
                                 <i className="bi bi-play"></i>
                               </button>
@@ -1122,7 +1073,6 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
                                 className="btn btn-outline-warning btn-sm"
                                 onClick={() => handleAdminAction(ad.id, 'pause')}
                                 disabled={isAdModifying}
-                                title="Mettre en pause"
                               >
                                 <i className="bi bi-pause"></i>
                               </button>
@@ -1131,38 +1081,41 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
                               className="btn btn-outline-danger btn-sm"
                               onClick={() => handleDeleteAd(ad.id)}
                               disabled={isAdModifying}
-                              title="Supprimer"
                             >
                               <i className="bi bi-trash"></i>
                             </button>
                           </>
                         )}
                         
-                        {/* Boutons Contact pour toutes les annonces (sauf les siennes) */}
-                        {isAuthenticated && !isUserAd && filter === 'all' && (
-                          <div className="d-flex gap-1">
+                        {/* BOUTONS DE CONTACT - TOUJOURS ACTIFS */}
+                        {!isUserAd && filter === 'all' && (
+                          <div className="d-flex gap-1 w-100 mt-2">
+                            {/* Bouton Discuter - Ouvre directement la messagerie */}
                             <button 
-                              className="btn btn-outline-primary btn-sm"
-                              onClick={() => handleContactSeller(ad)}
-                              title="Créer une transaction et discuter"
-                              disabled={isTransactionActive}
+                              className="btn btn-outline-primary btn-sm flex-fill"
+                              onClick={() => openDirectMessage(ad)}
+                              title="Ouvrir la messagerie"
                             >
-                              {isTransactionActive ? (
-                                <span className="spinner-border spinner-border-sm"></span>
-                              ) : (
-                                <>
-                                  <i className="bi bi-chat me-1"></i>
-                                  Discuter
-                                </>
-                              )}
+                              <i className="bi bi-chat me-1"></i>
+                              Discuter
                             </button>
+                            
+                            {/* Bouton WhatsApp - TOUJOURS ACTIF */}
                             <button 
                               className="btn btn-outline-success btn-sm"
                               onClick={() => handleWhatsAppContact(ad)}
                               title="Contacter sur WhatsApp"
-                              disabled={!ad.user?.phone}
                             >
                               <i className="bi bi-whatsapp"></i>
+                            </button>
+                            
+                            {/* Bouton Créer Transaction */}
+                            <button 
+                              className="btn btn-outline-info btn-sm"
+                              onClick={() => handleContactSeller(ad)}
+                              title="Créer une transaction"
+                            >
+                              <i className="bi bi-currency-exchange"></i>
                             </button>
                           </div>
                         )}
