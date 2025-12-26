@@ -1,4 +1,4 @@
-// src/components/PublicAdList.tsx - VERSION COMPLÈTE OPTIMISÉE
+// src/components/PublicAdList.tsx - VERSION FINALE AVEC WHATSAPP ET 72H
 import React, { useEffect, useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -14,6 +14,7 @@ interface User {
   reputation: number;
   email?: string;
   isActive?: boolean;
+  phone?: string;
 }
 
 interface Currency {
@@ -29,7 +30,7 @@ interface Ad {
   amount: number;
   price: number;
   currency: Currency;
-  status: 'active' | 'paused' | 'completed' | 'cancelled' | 'pending' | 'expired';
+  status: 'active' | 'paused' | 'completed' | 'cancelled' | 'pending';
   paymentMethod: string;
   user: User;
   createdAt: string;
@@ -38,7 +39,6 @@ interface Ad {
   minAmountPerTransaction?: number;
   maxAmountPerTransaction?: number;
   '@id'?: string;
-  isExpired?: boolean;
 }
 
 interface Notification {
@@ -123,13 +123,87 @@ const PublicAdList: React.FC = () => {
       case 'pending': return { class: 'bg-info', text: 'En attente', icon: 'bi-clock' };
       case 'completed': return { class: 'bg-secondary', text: 'Terminé', icon: 'bi-check-all' };
       case 'cancelled': return { class: 'bg-danger', text: 'Annulé', icon: 'bi-x-circle' };
-      case 'expired': return { class: 'bg-dark', text: 'Expiré', icon: 'bi-alarm' };
       default: return { class: 'bg-secondary', text: 'Inconnu', icon: 'bi-question-circle' };
     }
   };
 
+  const getTimeRemaining = (createdAt: string, timeLimitMinutes: number): string => {
+    const created = new Date(createdAt);
+    const expiresAt = new Date(created.getTime() + (timeLimitMinutes * 60000));
+    const now = new Date();
+    const diffMs = expiresAt.getTime() - now.getTime();
+    
+    if (diffMs <= 0) return 'Expiré';
+    
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffHours / 24);
+    
+    if (diffDays > 0) return `${diffDays}j ${diffHours % 24}h restantes`;
+    if (diffHours > 0) return `${diffHours}h restantes`;
+    
+    const diffMins = Math.floor(diffMs / 60000);
+    return `${diffMins}min restantes`;
+  };
+
+  const isAdExpired = (createdAt: string, timeLimitMinutes: number): boolean => {
+    const created = new Date(createdAt);
+    const expiresAt = new Date(created.getTime() + (timeLimitMinutes * 60000));
+    return expiresAt < new Date();
+  };
+
   // ============================================
-  // CHARGEMENT DES ANNONCES AVEC TOUTES LES ROUTES API
+  // FONCTIONS WHATSAPP ET MESSAGERIE
+  // ============================================
+
+  const handleWhatsAppContact = (ad: Ad) => {
+    if (!ad.user?.phone) {
+      showNotification('warning', 'Numéro de téléphone non disponible');
+      return;
+    }
+    
+    // Nettoyer le numéro de téléphone
+    let phone = ad.user.phone.replace(/\s+/g, '').replace('+', '');
+    
+    // S'assurer que c'est un numéro marocain
+    if (phone.startsWith('0')) {
+      phone = '212' + phone.substring(1);
+    } else if (!phone.startsWith('212')) {
+      phone = '212' + phone;
+    }
+    
+    // Message par défaut
+    const message = encodeURIComponent(
+      `Bonjour ${ad.user.fullName},\n\n` +
+      `Je suis intéressé par votre annonce sur CryptoMaroc P2P :\n` +
+      `- ${ad.type === 'buy' ? 'Achat' : 'Vente'} de ${ad.amount} ${ad.currency.code}\n` +
+      `- Prix : ${ad.price} MAD/${ad.currency.code}\n` +
+      `- Total : ${calculateTotal(ad)} MAD\n\n` +
+      `Pouvons-nous discuter de cette transaction ?`
+    );
+    
+    const whatsappUrl = `https://wa.me/${phone}?text=${message}`;
+    window.open(whatsappUrl, '_blank');
+  };
+
+  const handlePrivateMessage = (ad: Ad) => {
+    if (!isAuthenticated) {
+      showNotification('warning', 'Connectez-vous pour envoyer un message !');
+      navigate('/login', { state: { from: '/market' } });
+      return;
+    }
+    
+    navigate('/dashboard/messages', { 
+      state: { 
+        recipientId: ad.user.id,
+        recipientName: ad.user.fullName,
+        adId: ad.id,
+        subject: `Annonce #${ad.id} - ${ad.type === 'buy' ? 'Achat' : 'Vente'} ${ad.amount} ${ad.currency.code}`
+      }
+    });
+  };
+
+  // ============================================
+  // CHARGEMENT DES ANNONCES
   // ============================================
 
   const loadAds = useCallback(async () => {
@@ -138,168 +212,81 @@ const PublicAdList: React.FC = () => {
       setError(null);
       
       console.log('🌐 Chargement des annonces...');
-      console.log('🔧 Base URL:', api.defaults.baseURL);
       
-      // TOUTES LES ROUTES API POSSIBLES POUR LES ANNONCES
-      const apiEndpoints = [
-        // Routes standards API Platform
+      const endpoints = [
         '/ads',
         '/api/ads',
-        '/api/public/ads',
         '/public/ads',
-        
-        // Routes alternatives
+        '/api/public/ads',
         '/annonces',
-        '/api/annonces',
-        '/marketplace/ads',
-        '/api/marketplace/ads',
-        
-        // Routes avec filtres intégrés
-        '/ads/active',
-        '/api/ads/active',
-        '/ads/public',
-        '/api/ads/public',
-        
-        // Routes spécifiques
-        '/ads?status=active',
-        '/api/ads?status=active',
+        '/api/annonces'
       ];
 
-      // Paramètres de requête
       const params: any = {
         page: 1,
         itemsPerPage: 100,
         'order[createdAt]': 'desc'
       };
 
-      // Si pas admin, filtrer par statut actif
       if (!isAdmin) {
         params.status = 'active';
       }
 
       let response = null;
-      let successfulEndpoint = '';
-      let lastError = null;
-
-      // Tester toutes les routes jusqu'à trouver celle qui fonctionne
-      for (const endpoint of apiEndpoints) {
+      
+      for (const endpoint of endpoints) {
         try {
           console.log(`🔍 Test endpoint: ${endpoint}`);
-          
-          // Construire l'URL complète pour debug
-          const fullUrl = `${api.defaults.baseURL}${endpoint}`;
-          console.log(`🔗 URL complète: ${fullUrl}`);
-          
           response = await api.get(endpoint, { params });
-          
-          console.log(`✅ Succès avec ${endpoint} (status: ${response.status})`);
-          successfulEndpoint = endpoint;
+          console.log(`✅ Succès avec ${endpoint}`);
           break;
-          
         } catch (err: any) {
-          lastError = err;
-          const status = err.response?.status;
-          const message = err.message;
-          
-          console.log(`❌ ${endpoint}: ${status || 'Error'} - ${message}`);
-          
-          // Si c'est une 404, continuer avec le prochain endpoint
-          if (status === 404) {
-            continue;
-          }
-          
-          // Si c'est une erreur CORS ou réseau, arrêter les autres tests
-          if (status === undefined || message.includes('Network') || message.includes('CORS')) {
-            console.log('🛑 Erreur CORS/réseau détectée, arrêt des tests');
-            break;
-          }
+          console.log(`❌ ${endpoint}: ${err.response?.status || 'Error'}`);
+          continue;
         }
       }
 
-      // Si aucune route ne fonctionne
       if (!response) {
-        console.error('❌ Toutes les routes API ont échoué');
-        
-        // Afficher un message d'erreur clair
-        if (lastError?.message?.includes('Network') || lastError?.message?.includes('CORS')) {
-          throw new Error('Erreur de connexion CORS. Vérifiez la configuration du serveur backend.');
-        }
-        
         throw new Error('Impossible de se connecter à l\'API des annonces');
       }
 
-      console.log(`🎯 Route utilisée: ${successfulEndpoint}`);
       const responseData = response.data;
-      
-      // EXTRACTION DES DONNÉES SELON DIFFÉRENTS FORMATS
       let adsData: any[] = [];
       
-      // 1. Format Hydra (API Platform standard)
       if (responseData['hydra:member']) {
         adsData = responseData['hydra:member'];
-        console.log(`📋 Format Hydra: ${adsData.length} annonces`);
-      }
-      // 2. Format simple array
-      else if (Array.isArray(responseData)) {
+      } else if (Array.isArray(responseData)) {
         adsData = responseData;
-        console.log(`📋 Format Array: ${adsData.length} annonces`);
-      }
-      // 3. Format avec wrapper 'data'
-      else if (responseData.data && Array.isArray(responseData.data)) {
+      } else if (responseData.data && Array.isArray(responseData.data)) {
         adsData = responseData.data;
-        console.log(`📋 Format Data wrapper: ${adsData.length} annonces`);
-      }
-      // 4. Format avec 'items'
-      else if (responseData.items && Array.isArray(responseData.items)) {
+      } else if (responseData.items && Array.isArray(responseData.items)) {
         adsData = responseData.items;
-        console.log(`📋 Format Items: ${adsData.length} annonces`);
-      }
-      // 5. Format avec 'member'
-      else if (responseData.member && Array.isArray(responseData.member)) {
+      } else if (responseData.member && Array.isArray(responseData.member)) {
         adsData = responseData.member;
-        console.log(`📋 Format Member: ${adsData.length} annonces`);
-      }
-      // 6. Autres formats
-      else if (typeof responseData === 'object' && responseData !== null) {
-        // Essayer d'extraire toutes les propriétés qui sont des arrays
-        Object.keys(responseData).forEach(key => {
-          if (Array.isArray(responseData[key])) {
-            console.log(`🔍 Tableau trouvé dans ${key}: ${responseData[key].length} éléments`);
-            adsData = [...adsData, ...responseData[key]];
-          }
-        });
-        
-        if (adsData.length === 0) {
-          // Si c'est un objet unique (une seule annonce)
-          adsData = [responseData];
-        }
       }
       
-      console.log(`📊 Total annonces extraites: ${adsData.length}`);
+      console.log(`📊 ${adsData.length} annonces récupérées`);
 
-      // TRANSFORMATION DES DONNÉES
-      const now = new Date();
+      // TRANSFORMATION DES DONNÉES AVEC 72H PAR DÉFAUT
       const formattedAds: Ad[] = adsData.map((ad: any, index: number) => {
-        // Valeurs par défaut
-        const defaults = {
-          id: index + 1,
-          type: 'buy' as const,
-          amount: 0,
-          price: 0,
-          status: 'active' as const,
-          createdAt: now.toISOString(),
-          timeLimitMinutes: 1440, // 24h par défaut
+        // Définir 72 heures par défaut (4320 minutes)
+        const defaultTimeLimit = 4320; // 72 heures
+        
+        const adData = {
+          id: ad.id || index + 1,
+          type: ad.type || 'buy',
+          amount: parseFloat(ad.amount) || 0,
+          price: parseFloat(ad.price) || 0,
+          status: ad.status || 'active',
+          paymentMethod: ad.paymentMethod || ad.payment_method || 'Non spécifié',
+          createdAt: ad.createdAt || ad.created_at || new Date().toISOString(),
+          timeLimitMinutes: ad.timeLimitMinutes || ad.time_limit_minutes || defaultTimeLimit,
+          terms: ad.terms,
+          minAmountPerTransaction: ad.minAmountPerTransaction || ad.min_amount_per_transaction,
+          maxAmountPerTransaction: ad.maxAmountPerTransaction || ad.max_amount_per_transaction,
         };
         
-        // Fusionner avec les données de l'API
-        const adData = { ...defaults, ...ad };
-        
-        // Calculer l'expiration
-        const createdAt = new Date(adData.createdAt);
-        const expiresAt = new Date(createdAt.getTime() + (adData.timeLimitMinutes * 60000));
-        const isExpired = expiresAt < now && adData.status === 'active';
-        
-        // Extraire l'utilisateur
+        // Utilisateur
         let userData: User = { 
           id: 0, 
           fullName: 'Anonyme', 
@@ -310,15 +297,16 @@ const PublicAdList: React.FC = () => {
           if (typeof ad.user === 'object') {
             userData = {
               id: ad.user.id || 0,
-              fullName: ad.user.fullName || ad.user.full_name || ad.user.username || ad.user.email?.split('@')[0] || 'Utilisateur',
+              fullName: ad.user.fullName || ad.user.full_name || ad.user.username || 'Utilisateur',
               reputation: ad.user.reputation || 5.0,
               email: ad.user.email,
+              phone: ad.user.phone,
               isActive: ad.user.isActive !== false
             };
           }
         }
         
-        // Extraire la devise
+        // Devise
         let currencyData: Currency = { 
           id: 0, 
           code: 'USDT', 
@@ -340,58 +328,42 @@ const PublicAdList: React.FC = () => {
           }
         }
         
-        // Retourner l'annonce formatée
         return {
-          id: adData.id,
+          ...adData,
           '@id': ad['@id'] || `/api/ads/${adData.id}`,
-          type: adData.type,
-          amount: parseFloat(adData.amount) || 0,
-          price: parseFloat(adData.price) || 0,
-          currency: currencyData,
-          status: isExpired ? 'expired' : adData.status,
-          paymentMethod: ad.paymentMethod || ad.payment_method || 'Non spécifié',
           user: userData,
-          createdAt: adData.createdAt,
-          timeLimitMinutes: adData.timeLimitMinutes,
-          terms: ad.terms,
-          minAmountPerTransaction: ad.minAmountPerTransaction || ad.min_amount_per_transaction,
-          maxAmountPerTransaction: ad.maxAmountPerTransaction || ad.max_amount_per_transaction,
-          isExpired
+          currency: currencyData
         };
       });
 
-      console.log(`✅ ${formattedAds.length} annonces chargées avec succès`);
-      setAds(formattedAds);
+      // FILTRER LES ANNONCES EXPIRÉES POUR LES NON-ADMINS
+      const now = new Date();
+      const filteredAds = isAdmin 
+        ? formattedAds 
+        : formattedAds.filter(ad => {
+            if (ad.status !== 'active') return false;
+            const created = new Date(ad.createdAt);
+            const expiresAt = new Date(created.getTime() + (ad.timeLimitMinutes * 60000));
+            return expiresAt > now; // Ne garder que les non-expirées
+          });
+
+      console.log(`✅ ${filteredAds.length} annonces actives`);
+      setAds(filteredAds);
 
     } catch (err: any) {
-      console.error('❌ Erreur chargement annonces:', {
-        message: err.message,
-        status: err.response?.status,
-        data: err.response?.data,
-        config: err.config
-      });
+      console.error('❌ Erreur chargement annonces:', err);
       
       let errorMsg = 'Impossible de charger les annonces';
-      
-      if (err.message.includes('CORS')) {
-        errorMsg = 'Erreur CORS. Vérifiez la configuration du serveur.';
-      } else if (err.response?.status === 404) {
+      if (err.response?.status === 404) {
         errorMsg = 'Aucune annonce disponible pour le moment.';
-        // Pas d'erreur, juste aucun résultat
         setAds([]);
         setError(null);
-      } else if (err.response?.status === 401) {
-        errorMsg = 'Authentification requise';
-      } else if (err.response?.status === 403) {
-        errorMsg = 'Accès non autorisé';
-      } else if (err.response?.status === 500) {
-        errorMsg = 'Erreur serveur. Veuillez réessayer plus tard.';
+      } else if (err.message.includes('CORS')) {
+        errorMsg = 'Erreur de connexion au serveur.';
       }
       
       setError(errorMsg);
       setAds([]);
-      
-      // Notification pour l'utilisateur
       showNotification('error', errorMsg);
       
     } finally {
@@ -399,14 +371,9 @@ const PublicAdList: React.FC = () => {
     }
   }, [isAdmin, showNotification]);
 
-  // ============================================
-  // CHARGEMENT INITIAL ET ACTUALISATION
-  // ============================================
-
   useEffect(() => {
     loadAds();
     
-    // Actualisation automatique toutes les 30 secondes
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible') {
         loadAds();
@@ -437,6 +404,13 @@ const PublicAdList: React.FC = () => {
       return;
     }
 
+    // Vérifier si l'annonce n'est pas expirée
+    if (isAdExpired(ad.createdAt, ad.timeLimitMinutes)) {
+      showNotification('error', 'Cette annonce a expiré');
+      loadAds();
+      return;
+    }
+
     const actionType = ad.type === 'sell' ? 'l\'achat' : 'la vente';
     if (!window.confirm(
       `Confirmer ${actionType} de ${ad.amount} ${ad.currency.code} à ${ad.price} MAD ?\n\n` +
@@ -462,23 +436,14 @@ const PublicAdList: React.FC = () => {
 
       console.log('🔄 Création transaction:', transactionData);
 
-      // Routes API pour les transactions
-      const transactionEndpoints = [
-        '/transactions',
-        '/api/transactions',
-        '/api/public/transactions',
-        '/marketplace/transactions'
-      ];
-
+      const endpoints = ['/transactions', '/api/transactions'];
       let response = null;
       
-      for (const endpoint of transactionEndpoints) {
+      for (const endpoint of endpoints) {
         try {
           response = await api.post(endpoint, transactionData);
-          console.log(`✅ Transaction créée via ${endpoint}`);
           break;
         } catch (err) {
-          console.log(`❌ ${endpoint} échoué:`, err);
           continue;
         }
       }
@@ -507,8 +472,6 @@ const PublicAdList: React.FC = () => {
       if (err.response?.status === 404) errorMessage = 'Annonce non trouvée';
       if (err.response?.status === 409) errorMessage = 'Transaction déjà existante';
       if (err.code === 'ERR_NETWORK') errorMessage = 'Erreur de connexion';
-      if (err.response?.data?.detail) errorMessage = err.response.data.detail;
-      if (err.response?.data?.message) errorMessage = err.response.data.message;
       
       showNotification('error', errorMessage);
       
@@ -519,133 +482,6 @@ const PublicAdList: React.FC = () => {
         return newSet;
       });
       setCreatingTransaction(null);
-    }
-  };
-
-  const handleContactSeller = (ad: Ad) => {
-    if (!isAuthenticated) {
-      showNotification('warning', 'Connectez-vous pour contacter !');
-      navigate('/login', { state: { from: '/market' } });
-      return;
-    }
-    
-    navigate('/dashboard/messages', { 
-      state: { 
-        recipientId: ad.user.id,
-        recipientName: ad.user.fullName,
-        adId: ad.id 
-      }
-    });
-  };
-
-  const handleCreateSimilarAd = (ad: Ad) => {
-    if (!isAuthenticated) {
-      showNotification('warning', 'Créez un compte pour publier des annonces !');
-      navigate('/register', { state: { from: '/market' } });
-      return;
-    }
-    
-    navigate('/dashboard/ads/create', {
-      state: {
-        prefill: {
-          type: ad.type,
-          currency: ad.currency.id,
-          amount: ad.amount,
-          price: ad.price,
-          paymentMethod: ad.paymentMethod,
-          terms: ad.terms,
-          minAmountPerTransaction: ad.minAmountPerTransaction,
-          maxAmountPerTransaction: ad.maxAmountPerTransaction,
-          timeLimitMinutes: ad.timeLimitMinutes || 1440
-        }
-      }
-    });
-  };
-
-  // ============================================
-  // FONCTIONS ADMIN
-  // ============================================
-
-  const handleAdminAction = async (adId: number, action: string) => {
-    if (!isAdmin) {
-      showNotification('error', 'Action réservée aux administrateurs');
-      return;
-    }
-
-    try {
-      setModifyingAd(adId);
-      
-      let newStatus: string;
-      let actionText: string;
-      
-      switch (action) {
-        case 'activate':
-          newStatus = 'active';
-          actionText = 'activée';
-          break;
-        case 'pause':
-          newStatus = 'paused';
-          actionText = 'mise en pause';
-          break;
-        case 'suspend':
-          newStatus = 'cancelled';
-          actionText = 'suspendue';
-          break;
-        case 'approve':
-          newStatus = 'active';
-          actionText = 'approuvée';
-          break;
-        case 'reject':
-          newStatus = 'cancelled';
-          actionText = 'rejetée';
-          break;
-        default:
-          return;
-      }
-
-      console.log(`🔄 ${actionText} annonce ${adId}`);
-      
-      // Routes API pour modifier les annonces
-      const endpoints = [
-        `/ads/${adId}`,
-        `/api/ads/${adId}`,
-        `/annonces/${adId}`,
-        `/api/annonces/${adId}`
-      ];
-      
-      for (const endpoint of endpoints) {
-        try {
-          await api.patch(endpoint, { status: newStatus });
-          console.log(`✅ ${actionText} via ${endpoint}`);
-          break;
-        } catch (err) {
-          console.log(`❌ ${endpoint} échoué:`, err);
-          continue;
-        }
-      }
-      
-      showNotification('success', `Annonce ${actionText} avec succès !`);
-      
-      // Recharger les annonces
-      setTimeout(() => {
-        loadAds();
-      }, 1000);
-      
-    } catch (err: any) {
-      console.error(`❌ Erreur ${action} annonce:`, err);
-      
-      let errorMessage = `Erreur lors de l'action ${action}`;
-      if (err.response?.status === 404) {
-        errorMessage = 'Annonce non trouvée';
-      } else if (err.response?.status === 403) {
-        errorMessage = 'Permission refusée';
-      } else if (err.response?.data?.detail) {
-        errorMessage = err.response.data.detail;
-      }
-      
-      showNotification('error', errorMessage);
-    } finally {
-      setModifyingAd(null);
     }
   };
 
@@ -666,8 +502,6 @@ const PublicAdList: React.FC = () => {
       const matchesCurrency = currencyFilter === 'all' || 
         (ad.currency?.code?.toLowerCase() || '') === currencyFilter.toLowerCase();
       const matchesStatus = statusFilter === 'all' || ad.status === statusFilter;
-      
-      if (!isAdmin && ad.status !== 'active' && !ad.isExpired) return false;
       
       return matchesSearch && matchesType && matchesCurrency && matchesStatus;
     })
@@ -696,173 +530,59 @@ const PublicAdList: React.FC = () => {
     new Set(ads.map(ad => ad.currency?.code).filter(Boolean))
   ).sort();
 
-  const uniqueStatuses = Array.from(
-    new Set(ads.map(ad => ad.status).filter(Boolean))
-  ).sort();
-
   // ============================================
-  // COMPOSANTS D'INTERFACE
-  // ============================================
-
-  const NotificationDisplay = () => (
-    <div className="position-fixed top-0 end-0 p-3" style={{zIndex: 1050}}>
-      {notifications.map(notification => (
-        <div 
-          key={notification.id}
-          className={`toast show mb-2 ${notification.type === 'success' ? 'bg-success' :
-            notification.type === 'error' ? 'bg-danger' :
-            notification.type === 'warning' ? 'bg-warning text-dark' :
-            'bg-info'}`}
-          role="alert"
-        >
-          <div className="toast-body d-flex align-items-center">
-            <i className={`bi ${
-              notification.type === 'success' ? 'bi-check-circle' :
-              notification.type === 'error' ? 'bi-exclamation-circle' :
-              notification.type === 'warning' ? 'bi-exclamation-triangle' :
-              'bi-info-circle'
-            } me-3 fs-5`}></i>
-            <div className="flex-grow-1">
-              <div className="fw-medium" style={{whiteSpace: 'pre-line'}}>
-                {notification.message}
-              </div>
-            </div>
-            <button 
-              className="btn-close btn-close-white ms-2"
-              onClick={() => setNotifications(prev => prev.filter(n => n.id !== notification.id))}
-            ></button>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-
-  const LoadingSpinner = () => (
-    <div className="min-vh-100 bg-light py-5">
-      <div className="container py-5">
-        <div className="text-center py-5">
-          <div className="spinner-border text-primary mb-3" style={{width: '3rem', height: '3rem'}} role="status">
-            <span className="visually-hidden">Chargement...</span>
-          </div>
-          <h3 className="text-dark mb-2">Chargement du marketplace...</h3>
-          <p className="text-muted">Connexion à l'API en cours</p>
-          <button 
-            className="btn btn-outline-primary mt-3"
-            onClick={() => {
-              console.log('🔍 DEBUG API:', {
-                baseURL: api.defaults.baseURL,
-                endpoints: [
-                  `${api.defaults.baseURL}/ads`,
-                  `${api.defaults.baseURL}/api/ads`,
-                  `${api.defaults.baseURL}/public/ads`
-                ]
-              });
-            }}
-          >
-            <i className="bi bi-bug me-2"></i>
-            Voir URL API
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-
-  const ErrorDisplay = () => (
-    <div className="text-center py-5">
-      <div className="card shadow-sm border-0">
-        <div className="card-body py-5">
-          <i className="bi bi-exclamation-triangle text-danger display-1 mb-3"></i>
-          <h3 className="h2 fw-bold text-dark mb-2">Erreur de connexion</h3>
-          <p className="text-muted mb-4">{error}</p>
-          <div className="d-flex flex-column flex-md-row gap-3 justify-content-center">
-            <button 
-              className="btn btn-primary"
-              onClick={loadAds}
-            >
-              <i className="bi bi-arrow-clockwise me-2"></i>
-              Réessayer
-            </button>
-            <button 
-              className="btn btn-outline-secondary"
-              onClick={() => {
-                console.log('🧪 Test API manuel...');
-                const endpoints = [
-                  '/ads',
-                  '/api/ads',
-                  '/public/ads'
-                ];
-                
-                endpoints.forEach(async (endpoint) => {
-                  try {
-                    const res = await api.get(endpoint);
-                    console.log(`✅ ${endpoint}:`, res.status, res.data);
-                  } catch (err: any) {
-                    console.log(`❌ ${endpoint}:`, err.message);
-                  }
-                });
-              }}
-            >
-              <i className="bi bi-plug me-2"></i>
-              Tester endpoints
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-
-  const EmptyState = () => (
-    <div className="text-center py-5">
-      <div className="card shadow-sm border-0">
-        <div className="card-body py-5">
-          <i className="bi bi-inbox text-muted display-1 mb-3"></i>
-          <h3 className="h2 fw-bold text-dark mb-2">Aucune annonce trouvée</h3>
-          <p className="text-muted mb-4">
-            {searchTerm || typeFilter !== 'all' || currencyFilter !== 'all' || statusFilter !== 'all'
-              ? 'Ajustez vos critères de recherche'
-              : 'Aucune annonce active pour le moment. Soyez le premier à créer une annonce!'}
-          </p>
-          <div className="d-flex flex-wrap gap-2 justify-content-center">
-            {(searchTerm || typeFilter !== 'all' || currencyFilter !== 'all' || statusFilter !== 'all') && (
-              <button 
-                className="btn btn-secondary"
-                onClick={() => {
-                  setSearchTerm('');
-                  setTypeFilter('all');
-                  setCurrencyFilter('all');
-                  setStatusFilter('all');
-                }}
-              >
-                Réinitialiser les filtres
-              </button>
-            )}
-            {isAuthenticated && (
-              <button 
-                className="btn btn-warning fw-semibold"
-                onClick={() => navigate('/dashboard/ads/create')}
-              >
-                <i className="bi bi-plus-circle me-2"></i>
-                Créer une annonce
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-
-  // ============================================
-  // RENDU PRINCIPAL
+  // RENDU
   // ============================================
 
   if (loading) {
-    return <LoadingSpinner />;
+    return (
+      <div className="min-vh-100 bg-light py-5">
+        <div className="container py-5">
+          <div className="text-center py-5">
+            <div className="spinner-border text-primary mb-3" style={{width: '3rem', height: '3rem'}} role="status">
+              <span className="visually-hidden">Chargement...</span>
+            </div>
+            <h3 className="text-dark mb-2">Chargement du marketplace...</h3>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
     <div className="min-vh-100 bg-light">
-      <NotificationDisplay />
-      
+      {/* Notifications */}
+      <div className="position-fixed top-0 end-0 p-3" style={{zIndex: 1050}}>
+        {notifications.map(notification => (
+          <div 
+            key={notification.id}
+            className={`toast show mb-2 ${notification.type === 'success' ? 'bg-success' :
+              notification.type === 'error' ? 'bg-danger' :
+              notification.type === 'warning' ? 'bg-warning text-dark' :
+              'bg-info'}`}
+            role="alert"
+          >
+            <div className="toast-body d-flex align-items-center">
+              <i className={`bi ${
+                notification.type === 'success' ? 'bi-check-circle' :
+                notification.type === 'error' ? 'bi-exclamation-circle' :
+                notification.type === 'warning' ? 'bi-exclamation-triangle' :
+                'bi-info-circle'
+              } me-3 fs-5`}></i>
+              <div className="flex-grow-1">
+                <div className="fw-medium" style={{whiteSpace: 'pre-line'}}>
+                  {notification.message}
+                </div>
+              </div>
+              <button 
+                className="btn-close btn-close-white ms-2"
+                onClick={() => setNotifications(prev => prev.filter(n => n.id !== notification.id))}
+              ></button>
+            </div>
+          </div>
+        ))}
+      </div>
+
       {/* Hero Section */}
       <div className="bg-primary text-white py-5">
         <div className="container">
@@ -871,22 +591,22 @@ const PublicAdList: React.FC = () => {
               Marketplace Crypto P2P Maroc
             </h1>
             <p className="lead mb-4">
-              {isAdmin ? 'Panel d\'administration des annonces' : 'Achetez et vendez des cryptomonnaies en MAD avec des particuliers de confiance'}
+              Achetez et vendez des cryptomonnaies en MAD avec des particuliers de confiance
             </p>
             
             <div className="row justify-content-center mb-4">
               <div className="col-md-3 col-sm-6 mb-3">
                 <div className="bg-white bg-opacity-10 rounded p-3">
                   <div className="h2 fw-bold text-warning">{ads.length}</div>
-                  <div className="text-white text-opacity-75">Annonces totales</div>
+                  <div className="text-white text-opacity-75">Annonces actives</div>
                 </div>
               </div>
               <div className="col-md-3 col-sm-6 mb-3">
                 <div className="bg-white bg-opacity-10 rounded p-3">
                   <div className="h2 fw-bold text-success">
-                    {ads.filter(a => a.status === 'active' && !a.isExpired).length}
+                    {ads.filter(a => a.type === 'buy').length}
                   </div>
-                  <div className="text-white text-opacity-75">Actives</div>
+                  <div className="text-white text-opacity-75">Achats</div>
                 </div>
               </div>
               <div className="col-md-3 col-sm-6 mb-3">
@@ -897,16 +617,14 @@ const PublicAdList: React.FC = () => {
                   <div className="text-white text-opacity-75">Ventes</div>
                 </div>
               </div>
-              {isAdmin && (
-                <div className="col-md-3 col-sm-6 mb-3">
-                  <div className="bg-white bg-opacity-10 rounded p-3">
-                    <div className="h2 fw-bold text-warning">
-                      {ads.filter(a => a.status === 'pending').length}
-                    </div>
-                    <div className="text-white text-opacity-75">En attente</div>
+              <div className="col-md-3 col-sm-6 mb-3">
+                <div className="bg-white bg-opacity-10 rounded p-3">
+                  <div className="h2 fw-bold text-info">
+                    {Math.floor(ads.reduce((total, ad) => total + calculateTotal(ad), 0) / 1000)}K
                   </div>
+                  <div className="text-white text-opacity-75">MAD disponibles</div>
                 </div>
-              )}
+              </div>
             </div>
             
             {!isAuthenticated && (
@@ -937,7 +655,7 @@ const PublicAdList: React.FC = () => {
           <div className="card-body p-4">
             <h2 className="card-title h4 fw-bold text-dark mb-4">
               <i className="bi bi-filter me-2"></i>
-              {isAdmin ? 'Filtres d\'administration' : 'Trouvez l\'offre parfaite'}
+              Trouvez l'offre parfaite
             </h2>
             
             <div className="row g-3">
@@ -950,7 +668,7 @@ const PublicAdList: React.FC = () => {
                   <input
                     type="text"
                     className="form-control"
-                    placeholder="ID, crypto, banque, vendeur..."
+                    placeholder="Crypto, banque, vendeur..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                   />
@@ -992,24 +710,6 @@ const PublicAdList: React.FC = () => {
                 </select>
               </div>
               
-              {isAdmin && (
-                <div className="col-md-6 col-lg-2">
-                  <label className="form-label fw-medium">Statut</label>
-                  <select
-                    className="form-select"
-                    value={statusFilter}
-                    onChange={(e) => setStatusFilter(e.target.value)}
-                  >
-                    <option value="all">Tous statuts</option>
-                    {uniqueStatuses.map(status => (
-                      <option key={status} value={status}>
-                        {getStatusBadge(status).text}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-              
               <div className="col-md-6 col-lg-2">
                 <label className="form-label fw-medium">Trier par</label>
                 <div className="input-group">
@@ -1032,6 +732,17 @@ const PublicAdList: React.FC = () => {
                   </button>
                 </div>
               </div>
+              
+              <div className="col-md-6 col-lg-2">
+                <label className="form-label fw-medium">Actions</label>
+                <button 
+                  className="btn btn-outline-primary w-100"
+                  onClick={loadAds}
+                >
+                  <i className="bi bi-arrow-clockwise me-1"></i>
+                  Actualiser
+                </button>
+              </div>
             </div>
             
             <div className="mt-4 pt-4 border-top">
@@ -1046,291 +757,368 @@ const PublicAdList: React.FC = () => {
                     </span>
                   )}
                 </div>
-                <div className="d-flex gap-2">
-                  <button 
-                    className="btn btn-outline-primary btn-sm"
-                    onClick={loadAds}
-                  >
-                    <i className="bi bi-arrow-clockwise me-1"></i>
-                    Actualiser
-                  </button>
+                <div className="text-muted">
+                  <i className="bi bi-info-circle me-1"></i>
+                  Valable 72 heures
                 </div>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Contenu principal */}
+        {/* Liste des annonces */}
         {error ? (
-          <ErrorDisplay />
+          <div className="text-center py-5">
+            <div className="card shadow-sm border-0">
+              <div className="card-body py-5">
+                <i className="bi bi-exclamation-triangle text-danger display-1 mb-3"></i>
+                <h3 className="h2 fw-bold text-dark mb-2">Erreur de connexion</h3>
+                <p className="text-muted mb-4">{error}</p>
+                <button 
+                  className="btn btn-primary"
+                  onClick={loadAds}
+                >
+                  <i className="bi bi-arrow-clockwise me-2"></i>
+                  Réessayer
+                </button>
+              </div>
+            </div>
+          </div>
         ) : filteredAds.length === 0 ? (
-          <EmptyState />
+          <div className="text-center py-5">
+            <div className="card shadow-sm border-0">
+              <div className="card-body py-5">
+                <i className="bi bi-inbox text-muted display-1 mb-3"></i>
+                <h3 className="h2 fw-bold text-dark mb-2">Aucune annonce trouvée</h3>
+                <p className="text-muted mb-4">
+                  {searchTerm ? 'Ajustez vos critères de recherche' : 'Aucune annonce active pour le moment'}
+                </p>
+                <div className="d-flex flex-wrap gap-2 justify-content-center">
+                  {searchTerm && (
+                    <button 
+                      className="btn btn-secondary"
+                      onClick={() => setSearchTerm('')}
+                    >
+                      Réinitialiser la recherche
+                    </button>
+                  )}
+                  {isAuthenticated && (
+                    <button 
+                      className="btn btn-warning fw-semibold"
+                      onClick={() => navigate('/dashboard/ads/create')}
+                    >
+                      <i className="bi bi-plus-circle me-2"></i>
+                      Créer une annonce
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
         ) : (
-          <>
-            <div className="row g-4">
-              {filteredAds.map((ad) => {
-                const isUserAd = user && ad.user.id === user.id;
-                const isSellAd = ad.type === 'sell';
-                const statusBadge = getStatusBadge(ad.status);
-                const isTransactionActive = activeTransactions.has(ad.id);
-                
-                return (
-                  <div key={ad.id} className="col-12 col-md-6 col-lg-4">
-                    <div className="card h-100 shadow-sm border-0 hover-shadow transition-all ad-card">
-                      <div className="card-body p-4">
-                        {/* En-tête */}
-                        <div className="d-flex justify-content-between align-items-start mb-3">
-                          <div>
-                            <div className="d-flex flex-wrap gap-2 mb-2">
-                              <span className={`badge ${ad.type === 'buy' ? 'bg-success' : 'bg-danger'}`}>
-                                {ad.type === 'buy' ? '🛒 ACHAT' : '💰 VENTE'}
-                              </span>
-                              <span className={`badge ${statusBadge.class}`}>
-                                <i className={`bi ${statusBadge.icon} me-1`}></i>
-                                {statusBadge.text}
-                              </span>
-                              {ad.isExpired && (
-                                <span className="badge bg-dark">
-                                  <i className="bi bi-alarm me-1"></i>
-                                  Expiré
-                                </span>
-                              )}
-                            </div>
-                            <div className="small text-muted">
-                              <i className="bi bi-clock me-1"></i>
-                              {formatDate(ad.createdAt)}
-                              {ad.timeLimitMinutes && (
-                                <span className="ms-2">
-                                  <i className="bi bi-hourglass-split me-1"></i>
-                                  {ad.timeLimitMinutes >= 1440 
-                                    ? `${Math.floor(ad.timeLimitMinutes / 1440)}j`
-                                    : ad.timeLimitMinutes >= 60
-                                      ? `${Math.floor(ad.timeLimitMinutes / 60)}h`
-                                      : `${ad.timeLimitMinutes}min`
-                                  }
-                                </span>
-                              )}
-                            </div>
+          <div className="row g-4">
+            {filteredAds.map((ad) => {
+              const isUserAd = user && ad.user.id === user.id;
+              const isSellAd = ad.type === 'sell';
+              const statusBadge = getStatusBadge(ad.status);
+              const isTransactionActive = activeTransactions.has(ad.id);
+              const timeRemaining = getTimeRemaining(ad.createdAt, ad.timeLimitMinutes);
+              const isExpired = isAdExpired(ad.createdAt, ad.timeLimitMinutes);
+              
+              return (
+                <div key={ad.id} className="col-12 col-md-6 col-lg-4">
+                  <div className="card h-100 shadow-sm border-0 hover-shadow transition-all">
+                    <div className="card-body p-4">
+                      {/* En-tête avec badge et prix */}
+                      <div className="d-flex justify-content-between align-items-start mb-3">
+                        <div>
+                          <div className="d-flex flex-wrap gap-2 mb-2">
+                            <span className={`badge ${ad.type === 'buy' ? 'bg-success' : 'bg-danger'}`}>
+                              {ad.type === 'buy' ? '🛒 ACHAT' : '💰 VENTE'}
+                            </span>
+                            <span className={`badge ${statusBadge.class}`}>
+                              <i className={`bi ${statusBadge.icon} me-1`}></i>
+                              {statusBadge.text}
+                            </span>
                           </div>
-                          <div className="text-end">
-                            <div className="h3 fw-bold text-primary">
-                              {formatPrice(ad.price)} MAD
-                            </div>
-                            <div className="text-muted small">/{ad.currency?.code}</div>
+                          <div className="small text-muted">
+                            <i className="bi bi-clock me-1"></i>
+                            {formatDate(ad.createdAt)}
                           </div>
                         </div>
-                        
-                        {/* Titre */}
-                        <h5 className="card-title fw-bold text-dark mb-3">
-                          {ad.type === 'buy' ? 'Achat de' : 'Vente de'} {ad.amount} {ad.currency?.code}
-                        </h5>
-                        
-                        {/* Méthode de paiement */}
-                        <div className="d-flex align-items-center text-dark mb-3">
-                          <i className="bi bi-bank text-muted me-2"></i>
-                          <span className="fw-medium">{ad.paymentMethod}</span>
+                        <div className="text-end">
+                          <div className="h3 fw-bold text-primary">
+                            {formatPrice(ad.price)} MAD
+                          </div>
+                          <div className="text-muted small">/{ad.currency?.code}</div>
+                        </div>
+                      </div>
+                      
+                      {/* Titre */}
+                      <h5 className="card-title fw-bold text-dark mb-3">
+                        {ad.type === 'buy' ? 'Achat de' : 'Vente de'} {ad.amount} {ad.currency?.code}
+                      </h5>
+                      
+                      {/* Méthode de paiement */}
+                      <div className="d-flex align-items-center text-dark mb-3">
+                        <i className="bi bi-bank text-muted me-2"></i>
+                        <span className="fw-medium">{ad.paymentMethod}</span>
+                      </div>
+                      
+                      {/* Conditions */}
+                      {ad.terms && (
+                        <div className="mb-4">
+                          <div className="d-flex align-items-center text-muted mb-1">
+                            <i className="bi bi-chat-left-text me-2"></i>
+                            <span className="small fw-medium">Conditions</span>
+                          </div>
+                          <p className="text-muted small mb-0" style={{maxHeight: '3em', overflow: 'hidden'}}>
+                            {ad.terms}
+                          </p>
+                        </div>
+                      )}
+                      
+                      {/* Total et limites */}
+                      <div className="mb-4">
+                        <div className="d-flex justify-content-between align-items-center mb-2">
+                          <span className="text-muted">Montant total</span>
+                          <span className="h4 fw-bold text-dark">
+                            {calculateTotal(ad).toLocaleString('fr-MA')} MAD
+                          </span>
                         </div>
                         
-                        {/* Conditions */}
-                        {ad.terms && (
-                          <div className="mb-4">
-                            <div className="d-flex align-items-center text-muted mb-1">
-                              <i className="bi bi-chat-left-text me-2"></i>
-                              <span className="small fw-medium">Conditions</span>
-                            </div>
-                            <p className="text-muted small mb-0" style={{maxHeight: '3em', overflow: 'hidden'}}>
-                              {ad.terms}
-                            </p>
+                        {(ad.minAmountPerTransaction || ad.maxAmountPerTransaction) && (
+                          <div className="small text-muted">
+                            <i className="bi bi-sliders me-1"></i>
+                            {ad.minAmountPerTransaction ? `Min: ${ad.minAmountPerTransaction}` : 'Sans min'} / 
+                            {ad.maxAmountPerTransaction ? ` Max: ${ad.maxAmountPerTransaction}` : 'Sans max'}
                           </div>
                         )}
                         
-                        {/* Total */}
-                        <div className="mb-4">
-                          <div className="d-flex justify-content-between align-items-center mb-2">
-                            <span className="text-muted">Montant total</span>
-                            <span className="h4 fw-bold text-dark">
-                              {calculateTotal(ad).toLocaleString('fr-MA')} MAD
-                            </span>
+                        {/* Temps restant */}
+                        <div className={`small mt-2 ${isExpired ? 'text-danger' : 'text-success'}`}>
+                          <i className="bi bi-clock-history me-1"></i>
+                          {timeRemaining}
+                        </div>
+                      </div>
+                      
+                      {/* Vendeur/Acheteur */}
+                      <div className="border-top pt-3">
+                        <div className="d-flex justify-content-between align-items-center mb-3">
+                          <div>
+                            <div className="small text-muted">
+                              {ad.type === 'buy' ? 'Acheteur' : 'Vendeur'}
+                            </div>
+                            <div className="d-flex align-items-center">
+                              <div className="bg-primary bg-opacity-10 rounded-circle p-2 me-2">
+                                <i className="bi bi-person text-primary"></i>
+                              </div>
+                              <div>
+                                <div className="fw-semibold text-dark">
+                                  {ad.user?.fullName || 'Anonyme'}
+                                </div>
+                                <div className="d-flex align-items-center text-warning small">
+                                  <i className="bi bi-star-fill me-1"></i>
+                                  {ad.user?.reputation?.toFixed(1) || '5.0'}
+                                  <span className="badge bg-success bg-opacity-25 text-success ms-2">
+                                    <i className="bi bi-check-circle me-1"></i>
+                                    Vérifié
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
                           </div>
                           
-                          {/* Limites */}
-                          {(ad.minAmountPerTransaction || ad.maxAmountPerTransaction) && (
-                            <div className="small text-muted">
-                              <i className="bi bi-sliders me-1"></i>
-                              {ad.minAmountPerTransaction ? `Min: ${ad.minAmountPerTransaction}` : 'Sans min'} / 
-                              {ad.maxAmountPerTransaction ? ` Max: ${ad.maxAmountPerTransaction}` : 'Sans max'}
-                            </div>
-                          )}
+                          <div className="text-end">
+                            <div className="small text-muted">ID</div>
+                            <div className="fw-bold font-monospace">#{ad.id}</div>
+                          </div>
                         </div>
                         
-                        {/* Vendeur/Acheteur + Actions */}
-                        <div className="border-top pt-3">
-                          <div className="d-flex justify-content-between align-items-center mb-3">
-                            <div>
-                              <div className="small text-muted">
-                                {ad.type === 'buy' ? 'Acheteur' : 'Vendeur'}
+                        {/* BOUTONS D'ACTION */}
+                        <div className="mt-4">
+                          {isAuthenticated ? (
+                            <>
+                              {/* Bouton principal Acheter/Vendre */}
+                              <div className="mb-3">
+                                {isSellAd ? (
+                                  <button 
+                                    className={`btn w-100 ${isUserAd ? 'btn-secondary' : 'btn-success'}`}
+                                    onClick={() => handleBuyAd(ad)}
+                                    disabled={!!(isTransactionActive || isUserAd || isExpired)}
+                                    title={isUserAd ? 'Votre annonce' : isExpired ? 'Annonce expirée' : `Acheter ${ad.amount} ${ad.currency.code}`}
+                                  >
+                                    {isTransactionActive ? (
+                                      <>
+                                        <span className="spinner-border spinner-border-sm me-2"></span>
+                                        Création transaction...
+                                      </>
+                                    ) : isUserAd ? (
+                                      'Votre annonce'
+                                    ) : isExpired ? (
+                                      'Expiré'
+                                    ) : (
+                                      <>
+                                        <i className="bi bi-cart me-2"></i>
+                                        Acheter maintenant
+                                        <br />
+                                        <small className="small">
+                                          Total: {calculateTotal(ad).toLocaleString('fr-MA')} MAD
+                                        </small>
+                                      </>
+                                    )}
+                                  </button>
+                                ) : (
+                                  <button 
+                                    className={`btn w-100 ${isUserAd ? 'btn-secondary' : 'btn-warning'}`}
+                                    onClick={() => handleBuyAd(ad)}
+                                    disabled={!!(isTransactionActive || isUserAd || isExpired)}
+                                    title={isUserAd ? 'Votre annonce' : isExpired ? 'Annonce expirée' : `Vendre ${ad.amount} ${ad.currency.code}`}
+                                  >
+                                    {isTransactionActive ? (
+                                      <>
+                                        <span className="spinner-border spinner-border-sm me-2"></span>
+                                        Création transaction...
+                                      </>
+                                    ) : isUserAd ? (
+                                      'Votre annonce'
+                                    ) : isExpired ? (
+                                      'Expiré'
+                                    ) : (
+                                      <>
+                                        <i className="bi bi-currency-dollar me-2"></i>
+                                        Vendre à cet acheteur
+                                        <br />
+                                        <small className="small">
+                                          Total: {calculateTotal(ad).toLocaleString('fr-MA')} MAD
+                                        </small>
+                                      </>
+                                    )}
+                                  </button>
+                                )}
                               </div>
-                              <div className="d-flex align-items-center">
-                                <div className="bg-primary bg-opacity-10 rounded-circle p-2 me-2">
-                                  <i className="bi bi-person text-primary"></i>
-                                </div>
-                                <div>
-                                  <div className="fw-semibold text-dark">
-                                    {ad.user?.fullName || 'Anonyme'}
-                                  </div>
-                                  <div className="d-flex align-items-center text-warning small">
-                                    <i className="bi bi-star-fill me-1"></i>
-                                    {ad.user?.reputation?.toFixed(1) || '5.0'}
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                            
-                            <div className="text-end">
-                              <div className="small text-muted">ID</div>
-                              <div className="fw-bold font-monospace">#{ad.id}</div>
-                            </div>
-                          </div>
-                          
-                          {/* Boutons d'action */}
-                          <div className="mt-4">
-                            {isAuthenticated ? (
-                              <>
-                                <div className="mb-3">
-                                  {isSellAd ? (
-                                    <button 
-                                      className={`btn w-100 ${isUserAd ? 'btn-secondary' : 'btn-success'}`}
-                                      onClick={() => handleBuyAd(ad)}
-                                      disabled={!!(isTransactionActive || modifyingAd === ad.id || isUserAd)}
-                                      title={isUserAd ? 'Vous ne pouvez pas acheter votre propre annonce' : `Acheter ${ad.amount} ${ad.currency.code}`}
-                                    >
-                                      {isTransactionActive ? (
-                                        <>
-                                          <span className="spinner-border spinner-border-sm me-2"></span>
-                                          Création transaction...
-                                        </>
-                                      ) : isUserAd ? (
-                                        'Votre annonce'
-                                      ) : (
-                                        <>
-                                          <i className="bi bi-cart me-2"></i>
-                                          Acheter maintenant
-                                          <br />
-                                          <small className="small">
-                                            Total: {calculateTotal(ad).toLocaleString('fr-MA')} MAD
-                                          </small>
-                                        </>
-                                      )}
-                                    </button>
-                                  ) : (
-                                    <button 
-                                      className={`btn w-100 ${isUserAd ? 'btn-secondary' : 'btn-warning'}`}
-                                      onClick={() => handleBuyAd(ad)}
-                                      disabled={!!(isTransactionActive || modifyingAd === ad.id || isUserAd)}
-                                      title={isUserAd ? 'Vous ne pouvez pas vendre à votre propre annonce' : `Vendre ${ad.amount} ${ad.currency.code}`}
-                                    >
-                                      {isTransactionActive ? (
-                                        <>
-                                          <span className="spinner-border spinner-border-sm me-2"></span>
-                                          Création transaction...
-                                        </>
-                                      ) : isUserAd ? (
-                                        'Votre annonce'
-                                      ) : (
-                                        <>
-                                          <i className="bi bi-currency-dollar me-2"></i>
-                                          Vendre à cet acheteur
-                                          <br />
-                                          <small className="small">
-                                            Total: {calculateTotal(ad).toLocaleString('fr-MA')} MAD
-                                          </small>
-                                        </>
-                                      )}
-                                    </button>
-                                  )}
+                              
+                              {/* Boutons de contact */}
+                              <div className="row g-2">
+                                {/* WhatsApp */}
+                                <div className="col">
+                                  <button 
+                                    className="btn btn-success w-100"
+                                    onClick={() => handleWhatsAppContact(ad)}
+                                    disabled={!ad.user?.phone}
+                                    title={ad.user?.phone ? `Contacter sur WhatsApp` : 'Numéro non disponible'}
+                                  >
+                                    <i className="bi bi-whatsapp me-2"></i>
+                                    WhatsApp
+                                  </button>
                                 </div>
                                 
-                                <div className="row g-2">
-                                  <div className="col">
-                                    <button 
-                                      className="btn btn-primary w-100"
-                                      onClick={() => handleContactSeller(ad)}
-                                      disabled={modifyingAd === ad.id}
-                                    >
-                                      <i className="bi bi-chat me-2"></i>
-                                      Contacter
-                                    </button>
-                                  </div>
-                                  <div className="col">
-                                    <button 
-                                      className="btn btn-outline-primary w-100"
-                                      onClick={() => handleCreateSimilarAd(ad)}
-                                      disabled={modifyingAd === ad.id}
-                                    >
-                                      <i className="bi bi-copy me-2"></i>
-                                      Similaire
-                                    </button>
-                                  </div>
+                                {/* Message privé */}
+                                <div className="col">
+                                  <button 
+                                    className="btn btn-primary w-100"
+                                    onClick={() => handlePrivateMessage(ad)}
+                                  >
+                                    <i className="bi bi-chat me-2"></i>
+                                    Message
+                                  </button>
                                 </div>
-                              </>
-                            ) : (
-                              <>
+                              </div>
+                              
+                              {/* Options supplémentaires */}
+                              <div className="mt-2 text-center">
                                 <button 
-                                  className="btn btn-warning w-100 mb-2 fw-bold"
-                                  onClick={() => {
-                                    showNotification('info', 'Connectez-vous pour échanger !');
-                                    navigate('/login', { state: { from: '/market' } });
-                                  }}
+                                  className="btn btn-link text-decoration-none"
+                                  onClick={() => navigate('/dashboard/ads/create', {
+                                    state: { prefill: ad }
+                                  })}
                                 >
-                                  <i className="bi bi-shield-lock me-2"></i>
-                                  Se connecter pour échanger
+                                  <i className="bi bi-copy me-1"></i>
+                                  Créer une annonce similaire
                                 </button>
-                                <div className="text-center text-muted small">
-                                  <i className="bi bi-shield-check me-1"></i>
-                                  Gratuit • Sécurisé • Rapide
+                              </div>
+                            </>
+                          ) : (
+                            /* POUR LES NON-CONNECTÉS */
+                            <>
+                              <button 
+                                className="btn btn-warning w-100 mb-3 fw-bold"
+                                onClick={() => {
+                                  showNotification('info', 'Connectez-vous pour échanger !');
+                                  navigate('/login', { state: { from: '/market' } });
+                                }}
+                              >
+                                <i className="bi bi-shield-lock me-2"></i>
+                                Se connecter pour échanger
+                              </button>
+                              
+                              <div className="row g-2">
+                                <div className="col">
+                                  <button 
+                                    className="btn btn-outline-success w-100"
+                                    onClick={() => {
+                                      showNotification('info', 'Inscrivez-vous pour contacter !');
+                                      navigate('/register', { state: { from: '/market' } });
+                                    }}
+                                  >
+                                    <i className="bi bi-whatsapp me-2"></i>
+                                    WhatsApp
+                                  </button>
                                 </div>
-                              </>
-                            )}
-                          </div>
+                                <div className="col">
+                                  <button 
+                                    className="btn btn-outline-primary w-100"
+                                    onClick={() => {
+                                      showNotification('info', 'Inscrivez-vous pour envoyer des messages !');
+                                      navigate('/register', { state: { from: '/market' } });
+                                    }}
+                                  >
+                                    <i className="bi bi-chat me-2"></i>
+                                    Message
+                                  </button>
+                                </div>
+                              </div>
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>
                   </div>
-                );
-              })}
-            </div>
-            
-            {/* CTA pour les non-connectés */}
-            {!isAuthenticated && filteredAds.length > 0 && (
-              <div className="card bg-primary text-white mt-5 border-0 shadow-lg">
-                <div className="card-body p-5 text-center">
-                  <h3 className="card-title h2 fw-bold mb-3">
-                    Prêt à commencer à échanger ?
-                  </h3>
-                  <p className="card-text mb-4 opacity-75">
-                    Rejoignez {filteredAds.length} annonces actives et des milliers d'utilisateurs 
-                    qui échangent en toute confiance.
-                  </p>
-                  <div className="d-flex flex-column flex-md-row gap-3 justify-content-center">
-                    <Link 
-                      to="/register" 
-                      className="btn btn-light text-primary fw-bold px-4 py-3"
-                    >
-                      <i className="bi bi-rocket me-2"></i>
-                      Créer un compte gratuit
-                    </Link>
-                    <Link 
-                      to="/login" 
-                      className="btn btn-outline-light fw-bold px-4 py-3"
-                    >
-                      <i className="bi bi-box-arrow-in-right me-2"></i>
-                      Se connecter
-                    </Link>
-                  </div>
                 </div>
+              );
+            })}
+          </div>
+        )}
+        
+        {/* CTA pour inscription */}
+        {!isAuthenticated && filteredAds.length > 0 && (
+          <div className="card bg-primary text-white mt-5 border-0 shadow-lg">
+            <div className="card-body p-5 text-center">
+              <h3 className="card-title h2 fw-bold mb-3">
+                Prêt à commencer à échanger ?
+              </h3>
+              <p className="card-text mb-4 opacity-75">
+                Rejoignez {filteredAds.length} annonces actives et des milliers d'utilisateurs 
+                qui échangent en toute confiance.
+              </p>
+              <div className="d-flex flex-column flex-md-row gap-3 justify-content-center">
+                <Link 
+                  to="/register" 
+                  className="btn btn-light text-primary fw-bold px-4 py-3"
+                >
+                  <i className="bi bi-rocket me-2"></i>
+                  Créer un compte gratuit
+                </Link>
+                <Link 
+                  to="/login" 
+                  className="btn btn-outline-light fw-bold px-4 py-3"
+                >
+                  <i className="bi bi-box-arrow-in-right me-2"></i>
+                  Se connecter
+                </Link>
               </div>
-            )}
-          </>
+            </div>
+          </div>
         )}
       </div>
 
@@ -1346,12 +1134,17 @@ const PublicAdList: React.FC = () => {
           transition: all 0.3s ease;
         }
         
-        .ad-card {
+        .card {
           border: 1px solid rgba(0,0,0,.125);
         }
         
-        .ad-card:hover {
+        .card:hover {
           border-color: #0d6efd;
+        }
+        
+        .whatsapp-btn:hover {
+          background-color: #25D366 !important;
+          border-color: #25D366 !important;
         }
       `}</style>
     </div>
