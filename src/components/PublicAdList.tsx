@@ -1,4 +1,4 @@
-// src/components/PublicAdList.tsx - VERSION CORRIGÉE AVEC DEBUG
+// src/components/PublicAdList.tsx - VERSION COMPLÈTE OPTIMISÉE
 import React, { useEffect, useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -41,15 +41,6 @@ interface Ad {
   isExpired?: boolean;
 }
 
-interface TransactionCreateData {
-  ad: string;
-  buyer: string;
-  seller: string;
-  usdtAmount: number;
-  fiatAmount: number;
-  status: string;
-}
-
 interface Notification {
   type: 'success' | 'error' | 'info' | 'warning';
   message: string;
@@ -81,14 +72,6 @@ const PublicAdList: React.FC = () => {
   // FONCTIONS UTILITAIRES
   // ============================================
 
-  const extractHydraMember = useCallback((data: any): any[] => {
-    if (data?.member && Array.isArray(data.member)) return data.member;
-    if (data?.['hydra:member'] && Array.isArray(data['hydra:member'])) return data['hydra:member'];
-    if (Array.isArray(data)) return data;
-    return [];
-  }, []);
-
-  // Gestion des notifications
   const showNotification = useCallback((type: 'success' | 'error' | 'info' | 'warning', message: string) => {
     const id = Date.now();
     const notification: Notification = { type, message, id };
@@ -99,7 +82,6 @@ const PublicAdList: React.FC = () => {
     }, 5000);
   }, []);
 
-  // Formatage des dates
   const formatDate = (dateString: string): string => {
     try {
       const date = new Date(dateString);
@@ -147,57 +129,296 @@ const PublicAdList: React.FC = () => {
   };
 
   // ============================================
-  // FONCTIONS DE GESTION DES TRANSACTIONS
+  // CHARGEMENT DES ANNONCES AVEC TOUTES LES ROUTES API
   // ============================================
 
-  const checkUserBalance = async (userId: number, amountNeeded: number): Promise<boolean> => {
+  const loadAds = useCallback(async () => {
     try {
-      const response = await api.get(`/api/users/${userId}/wallet`);
-      const userBalance = response.data.balance || response.data.totalBalance || 0;
+      setLoading(true);
+      setError(null);
       
-      if (userBalance < amountNeeded) {
-        showNotification('error', 
-          `Solde insuffisant !\nSolde disponible: ${userBalance} MAD\nMontant nécessaire: ${amountNeeded} MAD`
-        );
-        return false;
-      }
-      return true;
-    } catch (error) {
-      console.log('⚠️ Impossible de vérifier le solde, continuation...');
-      return true;
-    }
-  };
+      console.log('🌐 Chargement des annonces...');
+      console.log('🔧 Base URL:', api.defaults.baseURL);
+      
+      // TOUTES LES ROUTES API POSSIBLES POUR LES ANNONCES
+      const apiEndpoints = [
+        // Routes standards API Platform
+        '/ads',
+        '/api/ads',
+        '/api/public/ads',
+        '/public/ads',
+        
+        // Routes alternatives
+        '/annonces',
+        '/api/annonces',
+        '/marketplace/ads',
+        '/api/marketplace/ads',
+        
+        // Routes avec filtres intégrés
+        '/ads/active',
+        '/api/ads/active',
+        '/ads/public',
+        '/api/ads/public',
+        
+        // Routes spécifiques
+        '/ads?status=active',
+        '/api/ads?status=active',
+      ];
 
-  const checkAdAvailability = async (adId: number): Promise<boolean> => {
-    try {
-      const response = await api.get(`/ads/${adId}`);
-      const adData = response.data;
+      // Paramètres de requête
+      const params: any = {
+        page: 1,
+        itemsPerPage: 100,
+        'order[createdAt]': 'desc'
+      };
+
+      // Si pas admin, filtrer par statut actif
+      if (!isAdmin) {
+        params.status = 'active';
+      }
+
+      let response = null;
+      let successfulEndpoint = '';
+      let lastError = null;
+
+      // Tester toutes les routes jusqu'à trouver celle qui fonctionne
+      for (const endpoint of apiEndpoints) {
+        try {
+          console.log(`🔍 Test endpoint: ${endpoint}`);
+          
+          // Construire l'URL complète pour debug
+          const fullUrl = `${api.defaults.baseURL}${endpoint}`;
+          console.log(`🔗 URL complète: ${fullUrl}`);
+          
+          response = await api.get(endpoint, { params });
+          
+          console.log(`✅ Succès avec ${endpoint} (status: ${response.status})`);
+          successfulEndpoint = endpoint;
+          break;
+          
+        } catch (err: any) {
+          lastError = err;
+          const status = err.response?.status;
+          const message = err.message;
+          
+          console.log(`❌ ${endpoint}: ${status || 'Error'} - ${message}`);
+          
+          // Si c'est une 404, continuer avec le prochain endpoint
+          if (status === 404) {
+            continue;
+          }
+          
+          // Si c'est une erreur CORS ou réseau, arrêter les autres tests
+          if (status === undefined || message.includes('Network') || message.includes('CORS')) {
+            console.log('🛑 Erreur CORS/réseau détectée, arrêt des tests');
+            break;
+          }
+        }
+      }
+
+      // Si aucune route ne fonctionne
+      if (!response) {
+        console.error('❌ Toutes les routes API ont échoué');
+        
+        // Afficher un message d'erreur clair
+        if (lastError?.message?.includes('Network') || lastError?.message?.includes('CORS')) {
+          throw new Error('Erreur de connexion CORS. Vérifiez la configuration du serveur backend.');
+        }
+        
+        throw new Error('Impossible de se connecter à l\'API des annonces');
+      }
+
+      console.log(`🎯 Route utilisée: ${successfulEndpoint}`);
+      const responseData = response.data;
       
-      if (adData.status !== 'active') {
-        showNotification('error', 'Cette annonce n\'est plus disponible');
-        loadAds();
-        return false;
+      // EXTRACTION DES DONNÉES SELON DIFFÉRENTS FORMATS
+      let adsData: any[] = [];
+      
+      // 1. Format Hydra (API Platform standard)
+      if (responseData['hydra:member']) {
+        adsData = responseData['hydra:member'];
+        console.log(`📋 Format Hydra: ${adsData.length} annonces`);
+      }
+      // 2. Format simple array
+      else if (Array.isArray(responseData)) {
+        adsData = responseData;
+        console.log(`📋 Format Array: ${adsData.length} annonces`);
+      }
+      // 3. Format avec wrapper 'data'
+      else if (responseData.data && Array.isArray(responseData.data)) {
+        adsData = responseData.data;
+        console.log(`📋 Format Data wrapper: ${adsData.length} annonces`);
+      }
+      // 4. Format avec 'items'
+      else if (responseData.items && Array.isArray(responseData.items)) {
+        adsData = responseData.items;
+        console.log(`📋 Format Items: ${adsData.length} annonces`);
+      }
+      // 5. Format avec 'member'
+      else if (responseData.member && Array.isArray(responseData.member)) {
+        adsData = responseData.member;
+        console.log(`📋 Format Member: ${adsData.length} annonces`);
+      }
+      // 6. Autres formats
+      else if (typeof responseData === 'object' && responseData !== null) {
+        // Essayer d'extraire toutes les propriétés qui sont des arrays
+        Object.keys(responseData).forEach(key => {
+          if (Array.isArray(responseData[key])) {
+            console.log(`🔍 Tableau trouvé dans ${key}: ${responseData[key].length} éléments`);
+            adsData = [...adsData, ...responseData[key]];
+          }
+        });
+        
+        if (adsData.length === 0) {
+          // Si c'est un objet unique (une seule annonce)
+          adsData = [responseData];
+        }
       }
       
-      if (adData.amount <= 0) {
-        showNotification('error', 'Cette annonce est épuisée');
-        return false;
+      console.log(`📊 Total annonces extraites: ${adsData.length}`);
+
+      // TRANSFORMATION DES DONNÉES
+      const now = new Date();
+      const formattedAds: Ad[] = adsData.map((ad: any, index: number) => {
+        // Valeurs par défaut
+        const defaults = {
+          id: index + 1,
+          type: 'buy' as const,
+          amount: 0,
+          price: 0,
+          status: 'active' as const,
+          createdAt: now.toISOString(),
+          timeLimitMinutes: 1440, // 24h par défaut
+        };
+        
+        // Fusionner avec les données de l'API
+        const adData = { ...defaults, ...ad };
+        
+        // Calculer l'expiration
+        const createdAt = new Date(adData.createdAt);
+        const expiresAt = new Date(createdAt.getTime() + (adData.timeLimitMinutes * 60000));
+        const isExpired = expiresAt < now && adData.status === 'active';
+        
+        // Extraire l'utilisateur
+        let userData: User = { 
+          id: 0, 
+          fullName: 'Anonyme', 
+          reputation: 5.0 
+        };
+        
+        if (ad.user) {
+          if (typeof ad.user === 'object') {
+            userData = {
+              id: ad.user.id || 0,
+              fullName: ad.user.fullName || ad.user.full_name || ad.user.username || ad.user.email?.split('@')[0] || 'Utilisateur',
+              reputation: ad.user.reputation || 5.0,
+              email: ad.user.email,
+              isActive: ad.user.isActive !== false
+            };
+          }
+        }
+        
+        // Extraire la devise
+        let currencyData: Currency = { 
+          id: 0, 
+          code: 'USDT', 
+          name: 'Tether USD', 
+          type: 'crypto' 
+        };
+        
+        if (ad.currency) {
+          if (typeof ad.currency === 'object') {
+            currencyData = {
+              id: ad.currency.id || 0,
+              code: ad.currency.code || 'USDT',
+              name: ad.currency.name || 'Tether USD',
+              type: ad.currency.type || 'crypto'
+            };
+          } else if (typeof ad.currency === 'string') {
+            currencyData.code = ad.currency;
+            currencyData.name = ad.currency;
+          }
+        }
+        
+        // Retourner l'annonce formatée
+        return {
+          id: adData.id,
+          '@id': ad['@id'] || `/api/ads/${adData.id}`,
+          type: adData.type,
+          amount: parseFloat(adData.amount) || 0,
+          price: parseFloat(adData.price) || 0,
+          currency: currencyData,
+          status: isExpired ? 'expired' : adData.status,
+          paymentMethod: ad.paymentMethod || ad.payment_method || 'Non spécifié',
+          user: userData,
+          createdAt: adData.createdAt,
+          timeLimitMinutes: adData.timeLimitMinutes,
+          terms: ad.terms,
+          minAmountPerTransaction: ad.minAmountPerTransaction || ad.min_amount_per_transaction,
+          maxAmountPerTransaction: ad.maxAmountPerTransaction || ad.max_amount_per_transaction,
+          isExpired
+        };
+      });
+
+      console.log(`✅ ${formattedAds.length} annonces chargées avec succès`);
+      setAds(formattedAds);
+
+    } catch (err: any) {
+      console.error('❌ Erreur chargement annonces:', {
+        message: err.message,
+        status: err.response?.status,
+        data: err.response?.data,
+        config: err.config
+      });
+      
+      let errorMsg = 'Impossible de charger les annonces';
+      
+      if (err.message.includes('CORS')) {
+        errorMsg = 'Erreur CORS. Vérifiez la configuration du serveur.';
+      } else if (err.response?.status === 404) {
+        errorMsg = 'Aucune annonce disponible pour le moment.';
+        // Pas d'erreur, juste aucun résultat
+        setAds([]);
+        setError(null);
+      } else if (err.response?.status === 401) {
+        errorMsg = 'Authentification requise';
+      } else if (err.response?.status === 403) {
+        errorMsg = 'Accès non autorisé';
+      } else if (err.response?.status === 500) {
+        errorMsg = 'Erreur serveur. Veuillez réessayer plus tard.';
       }
       
-      // Vérifier si l'annonce a expiré
-      const createdAt = new Date(adData.createdAt);
-      const expiresAt = new Date(createdAt.getTime() + (adData.timeLimitMinutes * 60000));
-      if (expiresAt < new Date()) {
-        showNotification('error', 'Cette annonce a expiré');
-        return false;
-      }
+      setError(errorMsg);
+      setAds([]);
       
-      return true;
-    } catch (error) {
-      console.error('❌ Erreur vérification annonce:', error);
-      return false;
+      // Notification pour l'utilisateur
+      showNotification('error', errorMsg);
+      
+    } finally {
+      setLoading(false);
     }
-  };
+  }, [isAdmin, showNotification]);
+
+  // ============================================
+  // CHARGEMENT INITIAL ET ACTUALISATION
+  // ============================================
+
+  useEffect(() => {
+    loadAds();
+    
+    // Actualisation automatique toutes les 30 secondes
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        loadAds();
+      }
+    }, 30000);
+    
+    return () => clearInterval(interval);
+  }, [loadAds]);
+
+  // ============================================
+  // GESTION DES TRANSACTIONS
+  // ============================================
 
   const handleBuyAd = async (ad: Ad) => {
     if (!isAuthenticated || !user) {
@@ -206,27 +427,14 @@ const PublicAdList: React.FC = () => {
       return;
     }
 
-    // Empêcher les clics multiples
     if (activeTransactions.has(ad.id)) {
       showNotification('info', 'Transaction déjà en cours...');
       return;
     }
 
-    // Vérifier qu'on n'achète pas sa propre annonce
     if (ad.user.id === user.id) {
       showNotification('warning', 'Vous ne pouvez pas échanger avec votre propre annonce !');
       return;
-    }
-
-    // Vérifier la disponibilité
-    const isAvailable = await checkAdAvailability(ad.id);
-    if (!isAvailable) return;
-
-    // Vérifier le solde si c'est un achat
-    if (ad.type === 'sell') {
-      const amountNeeded = calculateTotal(ad);
-      const hasEnoughBalance = await checkUserBalance(user.id, amountNeeded);
-      if (!hasEnoughBalance) return;
     }
 
     const actionType = ad.type === 'sell' ? 'l\'achat' : 'la vente';
@@ -243,7 +451,7 @@ const PublicAdList: React.FC = () => {
       setActiveTransactions(prev => new Set(prev).add(ad.id));
       setCreatingTransaction(ad.id);
       
-      const transactionData: TransactionCreateData = {
+      const transactionData = {
         ad: ad['@id'] || `/api/ads/${ad.id}`,
         buyer: ad.type === 'sell' ? `/api/users/${user.id}` : `/api/users/${ad.user.id}`,
         seller: ad.type === 'sell' ? `/api/users/${ad.user.id}` : `/api/users/${user.id}`,
@@ -252,16 +460,25 @@ const PublicAdList: React.FC = () => {
         status: 'pending'
       };
 
-      console.log('🔄 Création de transaction:', transactionData);
+      console.log('🔄 Création transaction:', transactionData);
 
-      const endpoints = ['/api/transactions', '/transactions'];
+      // Routes API pour les transactions
+      const transactionEndpoints = [
+        '/transactions',
+        '/api/transactions',
+        '/api/public/transactions',
+        '/marketplace/transactions'
+      ];
+
       let response = null;
       
-      for (const endpoint of endpoints) {
+      for (const endpoint of transactionEndpoints) {
         try {
           response = await api.post(endpoint, transactionData);
+          console.log(`✅ Transaction créée via ${endpoint}`);
           break;
         } catch (err) {
+          console.log(`❌ ${endpoint} échoué:`, err);
           continue;
         }
       }
@@ -339,7 +556,7 @@ const PublicAdList: React.FC = () => {
           terms: ad.terms,
           minAmountPerTransaction: ad.minAmountPerTransaction,
           maxAmountPerTransaction: ad.maxAmountPerTransaction,
-          timeLimitMinutes: ad.timeLimitMinutes
+          timeLimitMinutes: ad.timeLimitMinutes || 1440
         }
       }
     });
@@ -358,7 +575,6 @@ const PublicAdList: React.FC = () => {
     try {
       setModifyingAd(adId);
       
-      const endpoint = `/ads/${adId}`;
       let newStatus: string;
       let actionText: string;
       
@@ -387,11 +603,30 @@ const PublicAdList: React.FC = () => {
           return;
       }
 
-      console.log(`🔄 ${actionText} annonce ${adId} -> ${newStatus}`);
-      await api.patch(endpoint, { status: newStatus });
+      console.log(`🔄 ${actionText} annonce ${adId}`);
+      
+      // Routes API pour modifier les annonces
+      const endpoints = [
+        `/ads/${adId}`,
+        `/api/ads/${adId}`,
+        `/annonces/${adId}`,
+        `/api/annonces/${adId}`
+      ];
+      
+      for (const endpoint of endpoints) {
+        try {
+          await api.patch(endpoint, { status: newStatus });
+          console.log(`✅ ${actionText} via ${endpoint}`);
+          break;
+        } catch (err) {
+          console.log(`❌ ${endpoint} échoué:`, err);
+          continue;
+        }
+      }
       
       showNotification('success', `Annonce ${actionText} avec succès !`);
       
+      // Recharger les annonces
       setTimeout(() => {
         loadAds();
       }, 1000);
@@ -413,134 +648,6 @@ const PublicAdList: React.FC = () => {
       setModifyingAd(null);
     }
   };
-
-  // ============================================
-  // FONCTION DE SUPPRESSION POUR ADMIN
-  // ============================================
-
-  const handleDeleteAd = async (adId: number) => {
-    if (!isAdmin) {
-      showNotification('error', 'Action réservée aux administrateurs');
-      return;
-    }
-
-    if (!window.confirm('Êtes-vous sûr de vouloir supprimer définitivement cette annonce ? Cette action est irréversible.')) {
-      return;
-    }
-
-    try {
-      setModifyingAd(adId);
-      
-      console.log(`🗑️ Suppression définitive de l'annonce ${adId}`);
-      await api.delete(`/ads/${adId}`);
-      
-      showNotification('success', 'Annonce supprimée définitivement avec succès !');
-      
-      setTimeout(() => {
-        loadAds();
-      }, 1000);
-      
-    } catch (err: any) {
-      console.error('❌ Erreur suppression annonce:', err);
-      
-      let errorMessage = 'Erreur lors de la suppression';
-      if (err.response?.status === 404) {
-        errorMessage = 'Annonce non trouvée';
-      } else if (err.response?.status === 403) {
-        errorMessage = 'Permission refusée - Admin uniquement';
-      } else if (err.response?.status === 409) {
-        errorMessage = 'Impossible de supprimer : transactions actives associées';
-      } else if (err.response?.data?.detail) {
-        errorMessage = err.response.data.detail;
-      } else if (err.response?.data?.message) {
-        errorMessage = err.response.data.message;
-      }
-      
-      showNotification('error', errorMessage);
-    } finally {
-      setModifyingAd(null);
-    }
-  };
-
-  // ============================================
-  // CHARGEMENT DES DONNÉES
-  // ============================================
-
-  const loadAds = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      
-      console.log('🌐 Chargement des annonces publiques...');
-      
-      const params: any = { 
-        'order[createdAt]': 'desc',
-        page: 1,
-        itemsPerPage: 50
-      };
-
-      if (!isAdmin) {
-        params.status = 'active';
-      }
-
-      const response = await api.get('/ads', { params });
-      
-      const adsData = extractHydraMember(response.data);
-      console.log('✅ Annonces chargées:', adsData.length);
-      
-      const now = new Date();
-      const formattedAds: Ad[] = adsData.map((ad: any) => {
-        const createdAt = new Date(ad.createdAt || now);
-        const expiresAt = new Date(createdAt.getTime() + ((ad.timeLimitMinutes || 60) * 60000));
-        const isExpired = expiresAt < now && ad.status === 'active';
-        
-        return {
-          id: ad.id,
-          '@id': ad['@id'],
-          type: ad.type || 'buy',
-          amount: parseFloat(ad.amount) || 0,
-          price: parseFloat(ad.price) || 0,
-          currency: ad.currency || { id: 0, code: 'USDT', name: 'Tether USD', type: 'crypto' },
-          status: isExpired ? 'expired' : (ad.status || 'active'),
-          paymentMethod: ad.paymentMethod || 'Non spécifié',
-          user: ad.user || { id: 0, fullName: 'Utilisateur', reputation: 5.0 },
-          createdAt: ad.createdAt || now.toISOString(),
-          timeLimitMinutes: ad.timeLimitMinutes || 60,
-          terms: ad.terms,
-          minAmountPerTransaction: ad.minAmountPerTransaction ? parseFloat(ad.minAmountPerTransaction) : undefined,
-          maxAmountPerTransaction: ad.maxAmountPerTransaction ? parseFloat(ad.maxAmountPerTransaction) : undefined,
-          isExpired
-        };
-      });
-
-      setAds(formattedAds);
-
-    } catch (err: any) {
-      console.error('❌ Erreur chargement annonces:', err);
-      
-      if (err.name === 'AbortError') {
-        setError('Le chargement a pris trop de temps');
-      } else if (err.response?.status === 404) {
-        setError('Aucune annonce disponible');
-      } else {
-        setError('Impossible de charger les annonces');
-      }
-      
-      setAds([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [extractHydraMember, isAdmin]);
-
-  useEffect(() => {
-    loadAds();
-    
-    const interval = setInterval(() => {
-      loadAds();
-    }, 30000);
-    
-    return () => clearInterval(interval);
-  }, [loadAds]);
 
   // ============================================
   // FILTRAGE ET TRI
@@ -594,623 +701,598 @@ const PublicAdList: React.FC = () => {
   ).sort();
 
   // ============================================
-  // RENDU
+  // COMPOSANTS D'INTERFACE
   // ============================================
 
-  if (loading && ads.length === 0) {
-    return (
-      <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 py-16">
-        <div className="container mx-auto px-4">
-          <div className="text-center py-20">
-            <div className="spinner-border text-yellow-500" style={{width: '4rem', height: '4rem'}} role="status">
-              <span className="visually-hidden">Chargement...</span>
+  const NotificationDisplay = () => (
+    <div className="position-fixed top-0 end-0 p-3" style={{zIndex: 1050}}>
+      {notifications.map(notification => (
+        <div 
+          key={notification.id}
+          className={`toast show mb-2 ${notification.type === 'success' ? 'bg-success' :
+            notification.type === 'error' ? 'bg-danger' :
+            notification.type === 'warning' ? 'bg-warning text-dark' :
+            'bg-info'}`}
+          role="alert"
+        >
+          <div className="toast-body d-flex align-items-center">
+            <i className={`bi ${
+              notification.type === 'success' ? 'bi-check-circle' :
+              notification.type === 'error' ? 'bi-exclamation-circle' :
+              notification.type === 'warning' ? 'bi-exclamation-triangle' :
+              'bi-info-circle'
+            } me-3 fs-5`}></i>
+            <div className="flex-grow-1">
+              <div className="fw-medium" style={{whiteSpace: 'pre-line'}}>
+                {notification.message}
+              </div>
             </div>
-            <h3 className="text-gray-800 mt-4">Chargement du marché...</h3>
-            <p className="text-gray-600">Récupération des annonces en cours</p>
+            <button 
+              className="btn-close btn-close-white ms-2"
+              onClick={() => setNotifications(prev => prev.filter(n => n.id !== notification.id))}
+            ></button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+
+  const LoadingSpinner = () => (
+    <div className="min-vh-100 bg-light py-5">
+      <div className="container py-5">
+        <div className="text-center py-5">
+          <div className="spinner-border text-primary mb-3" style={{width: '3rem', height: '3rem'}} role="status">
+            <span className="visually-hidden">Chargement...</span>
+          </div>
+          <h3 className="text-dark mb-2">Chargement du marketplace...</h3>
+          <p className="text-muted">Connexion à l'API en cours</p>
+          <button 
+            className="btn btn-outline-primary mt-3"
+            onClick={() => {
+              console.log('🔍 DEBUG API:', {
+                baseURL: api.defaults.baseURL,
+                endpoints: [
+                  `${api.defaults.baseURL}/ads`,
+                  `${api.defaults.baseURL}/api/ads`,
+                  `${api.defaults.baseURL}/public/ads`
+                ]
+              });
+            }}
+          >
+            <i className="bi bi-bug me-2"></i>
+            Voir URL API
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const ErrorDisplay = () => (
+    <div className="text-center py-5">
+      <div className="card shadow-sm border-0">
+        <div className="card-body py-5">
+          <i className="bi bi-exclamation-triangle text-danger display-1 mb-3"></i>
+          <h3 className="h2 fw-bold text-dark mb-2">Erreur de connexion</h3>
+          <p className="text-muted mb-4">{error}</p>
+          <div className="d-flex flex-column flex-md-row gap-3 justify-content-center">
+            <button 
+              className="btn btn-primary"
+              onClick={loadAds}
+            >
+              <i className="bi bi-arrow-clockwise me-2"></i>
+              Réessayer
+            </button>
+            <button 
+              className="btn btn-outline-secondary"
+              onClick={() => {
+                console.log('🧪 Test API manuel...');
+                const endpoints = [
+                  '/ads',
+                  '/api/ads',
+                  '/public/ads'
+                ];
+                
+                endpoints.forEach(async (endpoint) => {
+                  try {
+                    const res = await api.get(endpoint);
+                    console.log(`✅ ${endpoint}:`, res.status, res.data);
+                  } catch (err: any) {
+                    console.log(`❌ ${endpoint}:`, err.message);
+                  }
+                });
+              }}
+            >
+              <i className="bi bi-plug me-2"></i>
+              Tester endpoints
+            </button>
           </div>
         </div>
       </div>
-    );
+    </div>
+  );
+
+  const EmptyState = () => (
+    <div className="text-center py-5">
+      <div className="card shadow-sm border-0">
+        <div className="card-body py-5">
+          <i className="bi bi-inbox text-muted display-1 mb-3"></i>
+          <h3 className="h2 fw-bold text-dark mb-2">Aucune annonce trouvée</h3>
+          <p className="text-muted mb-4">
+            {searchTerm || typeFilter !== 'all' || currencyFilter !== 'all' || statusFilter !== 'all'
+              ? 'Ajustez vos critères de recherche'
+              : 'Aucune annonce active pour le moment. Soyez le premier à créer une annonce!'}
+          </p>
+          <div className="d-flex flex-wrap gap-2 justify-content-center">
+            {(searchTerm || typeFilter !== 'all' || currencyFilter !== 'all' || statusFilter !== 'all') && (
+              <button 
+                className="btn btn-secondary"
+                onClick={() => {
+                  setSearchTerm('');
+                  setTypeFilter('all');
+                  setCurrencyFilter('all');
+                  setStatusFilter('all');
+                }}
+              >
+                Réinitialiser les filtres
+              </button>
+            )}
+            {isAuthenticated && (
+              <button 
+                className="btn btn-warning fw-semibold"
+                onClick={() => navigate('/dashboard/ads/create')}
+              >
+                <i className="bi bi-plus-circle me-2"></i>
+                Créer une annonce
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  // ============================================
+  // RENDU PRINCIPAL
+  // ============================================
+
+  if (loading) {
+    return <LoadingSpinner />;
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100">
-      {/* Notifications */}
-      <div className="fixed top-4 right-4 z-50 space-y-2 max-w-md">
-        {notifications.map(notification => (
-          <div 
-            key={notification.id}
-            className={`p-4 rounded-lg shadow-lg transform transition-all duration-300 ${
-              notification.type === 'success' ? 'bg-green-500 text-white' :
-              notification.type === 'error' ? 'bg-red-500 text-white' :
-              notification.type === 'warning' ? 'bg-yellow-500 text-black' :
-              'bg-blue-500 text-white'
-            }`}
-          >
-            <div className="flex items-start">
-              <i className={`bi ${
-                notification.type === 'success' ? 'bi-check-circle' :
-                notification.type === 'error' ? 'bi-exclamation-circle' :
-                notification.type === 'warning' ? 'bi-exclamation-triangle' :
-                'bi-info-circle'
-              } me-3 text-xl`}></i>
-              <div className="flex-1">
-                <div className="font-medium whitespace-pre-line">{notification.message}</div>
-              </div>
-              <button 
-                className="ml-2 text-current opacity-70 hover:opacity-100"
-                onClick={() => setNotifications(prev => prev.filter(n => n.id !== notification.id))}
-              >
-                <i className="bi bi-x-lg"></i>
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-
+    <div className="min-vh-100 bg-light">
+      <NotificationDisplay />
+      
       {/* Hero Section */}
-      <div className="bg-gradient-to-r from-blue-900 via-purple-900 to-indigo-900 text-white py-12 md:py-16">
-        <div className="container mx-auto px-4 text-center">
-          <h1 className="text-4xl md:text-5xl font-bold mb-4">
-            Marketplace Crypto P2P Maroc
-          </h1>
-          <p className="text-xl text-gray-300 mb-6 max-w-3xl mx-auto">
-            {isAdmin ? 'Panel d\'administration des annonces' : 'Achetez et vendez des cryptomonnaies en MAD avec des particuliers de confiance'}
-          </p>
-          
-          <div className="flex flex-wrap justify-center gap-4 mb-8">
-            <div className="bg-white/10 backdrop-blur-sm rounded-lg px-6 py-3">
-              <div className="text-2xl font-bold text-yellow-400">{ads.length}</div>
-              <div className="text-gray-300 text-sm">Annonces totales</div>
-            </div>
-            <div className="bg-white/10 backdrop-blur-sm rounded-lg px-6 py-3">
-              <div className="text-2xl font-bold text-green-400">
-                {ads.filter(a => a.status === 'active' && !a.isExpired).length}
-              </div>
-              <div className="text-gray-300 text-sm">Actives</div>
-            </div>
-            <div className="bg-white/10 backdrop-blur-sm rounded-lg px-6 py-3">
-              <div className="text-2xl font-bold text-red-400">
-                {ads.filter(a => a.type === 'sell').length}
-              </div>
-              <div className="text-gray-300 text-sm">Ventes</div>
-            </div>
-            {isAdmin && (
-              <div className="bg-white/10 backdrop-blur-sm rounded-lg px-6 py-3">
-                <div className="text-2xl font-bold text-orange-400">
-                  {ads.filter(a => a.status === 'pending').length}
+      <div className="bg-primary text-white py-5">
+        <div className="container">
+          <div className="text-center">
+            <h1 className="display-5 fw-bold mb-3">
+              Marketplace Crypto P2P Maroc
+            </h1>
+            <p className="lead mb-4">
+              {isAdmin ? 'Panel d\'administration des annonces' : 'Achetez et vendez des cryptomonnaies en MAD avec des particuliers de confiance'}
+            </p>
+            
+            <div className="row justify-content-center mb-4">
+              <div className="col-md-3 col-sm-6 mb-3">
+                <div className="bg-white bg-opacity-10 rounded p-3">
+                  <div className="h2 fw-bold text-warning">{ads.length}</div>
+                  <div className="text-white text-opacity-75">Annonces totales</div>
                 </div>
-                <div className="text-gray-300 text-sm">En attente</div>
+              </div>
+              <div className="col-md-3 col-sm-6 mb-3">
+                <div className="bg-white bg-opacity-10 rounded p-3">
+                  <div className="h2 fw-bold text-success">
+                    {ads.filter(a => a.status === 'active' && !a.isExpired).length}
+                  </div>
+                  <div className="text-white text-opacity-75">Actives</div>
+                </div>
+              </div>
+              <div className="col-md-3 col-sm-6 mb-3">
+                <div className="bg-white bg-opacity-10 rounded p-3">
+                  <div className="h2 fw-bold text-danger">
+                    {ads.filter(a => a.type === 'sell').length}
+                  </div>
+                  <div className="text-white text-opacity-75">Ventes</div>
+                </div>
+              </div>
+              {isAdmin && (
+                <div className="col-md-3 col-sm-6 mb-3">
+                  <div className="bg-white bg-opacity-10 rounded p-3">
+                    <div className="h2 fw-bold text-warning">
+                      {ads.filter(a => a.status === 'pending').length}
+                    </div>
+                    <div className="text-white text-opacity-75">En attente</div>
+                  </div>
+                </div>
+              )}
+            </div>
+            
+            {!isAuthenticated && (
+              <div className="d-flex flex-column flex-md-row gap-3 justify-content-center mb-4">
+                <Link 
+                  to="/register" 
+                  className="btn btn-warning btn-lg fw-bold px-5"
+                >
+                  <i className="bi bi-rocket me-2"></i>
+                  S'inscrire Gratuitement
+                </Link>
+                <Link 
+                  to="/login" 
+                  className="btn btn-outline-light btn-lg fw-bold px-5"
+                >
+                  <i className="bi bi-box-arrow-in-right me-2"></i>
+                  Se Connecter
+                </Link>
               </div>
             )}
           </div>
-          
-          {!isAuthenticated && (
-            <div className="flex flex-col md:flex-row gap-4 justify-center mb-8">
-              <Link 
-                to="/register" 
-                className="px-8 py-3 bg-yellow-500 text-black font-bold rounded-lg hover:bg-yellow-400 transition shadow-lg"
-              >
-                🚀 S'inscrire Gratuitement
-              </Link>
-              <Link 
-                to="/login" 
-                className="px-8 py-3 border-2 border-yellow-500 text-yellow-500 font-bold rounded-lg hover:bg-yellow-500 hover:text-black transition"
-              >
-                🔑 Se Connecter
-              </Link>
-            </div>
-          )}
-          {isAdmin && (
-            <div className="bg-yellow-500/20 border border-yellow-500 rounded-lg p-4 max-w-2xl mx-auto">
-              <i className="bi bi-shield-check me-2"></i>
-              <span className="font-semibold">Mode Administrateur activé</span>
-              <p className="text-sm text-yellow-200 mt-1">
-                Vous pouvez modifier le statut ou supprimer toutes les annonces
-              </p>
-            </div>
-          )}
         </div>
       </div>
 
       {/* Filtres et recherche */}
-      <div className="container mx-auto px-4 py-8">
-        <div className="bg-white rounded-xl shadow-lg p-6 mb-8">
-          <h2 className="text-2xl font-bold text-gray-800 mb-6">
-            <i className="bi bi-filter me-2"></i>
-            {isAdmin ? 'Filtres d\'administration' : 'Trouvez l\'offre parfaite'}
-          </h2>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
-            <div className="md:col-span-2">
-              <label className="text-gray-700 mb-2 block font-medium">Rechercher</label>
-              <div className="relative">
-                <input
-                  type="text"
-                  className="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  placeholder="ID, crypto, banque, vendeur..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                />
-                {searchTerm && (
-                  <button 
-                    className="absolute right-3 top-3 text-gray-500 hover:text-gray-700"
-                    onClick={() => setSearchTerm('')}
-                  >
-                    <i className="bi bi-x-lg"></i>
-                  </button>
-                )}
+      <div className="container py-5">
+        <div className="card shadow-lg mb-5">
+          <div className="card-body p-4">
+            <h2 className="card-title h4 fw-bold text-dark mb-4">
+              <i className="bi bi-filter me-2"></i>
+              {isAdmin ? 'Filtres d\'administration' : 'Trouvez l\'offre parfaite'}
+            </h2>
+            
+            <div className="row g-3">
+              <div className="col-md-6 col-lg-4">
+                <label className="form-label fw-medium">Rechercher</label>
+                <div className="input-group">
+                  <span className="input-group-text">
+                    <i className="bi bi-search"></i>
+                  </span>
+                  <input
+                    type="text"
+                    className="form-control"
+                    placeholder="ID, crypto, banque, vendeur..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                  />
+                  {searchTerm && (
+                    <button 
+                      className="btn btn-outline-secondary"
+                      onClick={() => setSearchTerm('')}
+                    >
+                      <i className="bi bi-x"></i>
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
-            
-            <div>
-              <label className="text-gray-700 mb-2 block font-medium">Type</label>
-              <select
-                className="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                value={typeFilter}
-                onChange={(e) => setTypeFilter(e.target.value as any)}
-              >
-                <option value="all">Tous types</option>
-                <option value="buy">Achat</option>
-                <option value="sell">Vente</option>
-              </select>
-            </div>
-            
-            <div>
-              <label className="text-gray-700 mb-2 block font-medium">Devise</label>
-              <select
-                className="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                value={currencyFilter}
-                onChange={(e) => setCurrencyFilter(e.target.value)}
-              >
-                <option value="all">Toutes</option>
-                {uniqueCurrencies.map(code => (
-                  <option key={code} value={code}>{code}</option>
-                ))}
-              </select>
-            </div>
-            
-            {isAdmin && (
-              <div>
-                <label className="text-gray-700 mb-2 block font-medium">Statut</label>
+              
+              <div className="col-md-6 col-lg-2">
+                <label className="form-label fw-medium">Type</label>
                 <select
-                  className="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
+                  className="form-select"
+                  value={typeFilter}
+                  onChange={(e) => setTypeFilter(e.target.value as any)}
                 >
-                  <option value="all">Tous statuts</option>
-                  {uniqueStatuses.map(status => (
-                    <option key={status} value={status}>
-                      {getStatusBadge(status).text}
-                    </option>
+                  <option value="all">Tous types</option>
+                  <option value="buy">Achat</option>
+                  <option value="sell">Vente</option>
+                </select>
+              </div>
+              
+              <div className="col-md-6 col-lg-2">
+                <label className="form-label fw-medium">Devise</label>
+                <select
+                  className="form-select"
+                  value={currencyFilter}
+                  onChange={(e) => setCurrencyFilter(e.target.value)}
+                >
+                  <option value="all">Toutes</option>
+                  {uniqueCurrencies.map(code => (
+                    <option key={code} value={code}>{code}</option>
                   ))}
                 </select>
               </div>
-            )}
+              
+              {isAdmin && (
+                <div className="col-md-6 col-lg-2">
+                  <label className="form-label fw-medium">Statut</label>
+                  <select
+                    className="form-select"
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value)}
+                  >
+                    <option value="all">Tous statuts</option>
+                    {uniqueStatuses.map(status => (
+                      <option key={status} value={status}>
+                        {getStatusBadge(status).text}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              
+              <div className="col-md-6 col-lg-2">
+                <label className="form-label fw-medium">Trier par</label>
+                <div className="input-group">
+                  <select
+                    className="form-select"
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value as any)}
+                  >
+                    <option value="created">Date</option>
+                    <option value="price">Prix</option>
+                    <option value="amount">Montant</option>
+                    <option value="reputation">Réputation</option>
+                  </select>
+                  <button
+                    className="btn btn-outline-secondary"
+                    onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
+                    title={sortOrder === 'asc' ? 'Croissant' : 'Décroissant'}
+                  >
+                    <i className={`bi bi-arrow-${sortOrder === 'asc' ? 'up' : 'down'}`}></i>
+                  </button>
+                </div>
+              </div>
+            </div>
             
-            <div>
-              <label className="text-gray-700 mb-2 block font-medium">Trier par</label>
-              <div className="flex gap-2">
-                <select
-                  className="flex-1 p-3 bg-gray-50 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  value={sortBy}
-                  onChange={(e) => setSortBy(e.target.value as any)}
-                >
-                  <option value="created">Date</option>
-                  <option value="price">Prix</option>
-                  <option value="amount">Montant</option>
-                  <option value="reputation">Réputation</option>
-                </select>
-                <button
-                  className="p-3 bg-gray-100 border border-gray-300 rounded-lg hover:bg-gray-200"
-                  onClick={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
-                  title={sortOrder === 'asc' ? 'Croissant' : 'Décroissant'}
-                >
-                  <i className={`bi bi-arrow-${sortOrder === 'asc' ? 'up' : 'down'}`}></i>
-                </button>
-              </div>
-            </div>
-          </div>
-          
-          {isAdmin && (
-            <div className="mt-6 pt-6 border-t border-gray-200">
-              <div className="flex flex-wrap gap-2">
-                <button 
-                  className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition"
-                  onClick={() => showNotification('info', 'Fonctionnalité en développement')}
-                >
-                  <i className="bi bi-check-circle me-2"></i>
-                  Activer sélection
-                </button>
-                <button 
-                  className="px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition"
-                  onClick={() => showNotification('info', 'Fonctionnalité en développement')}
-                >
-                  <i className="bi bi-pause-circle me-2"></i>
-                  Suspendre sélection
-                </button>
-                <button 
-                  className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition"
-                  onClick={() => showNotification('info', 'Fonctionnalité en développement')}
-                >
-                  <i className="bi bi-trash me-2"></i>
-                  Supprimer sélection
-                </button>
-              </div>
-            </div>
-          )}
-          
-          <div className="mt-6 pt-6 border-t border-gray-200">
-            <div className="flex justify-between items-center">
-              <div>
-                <span className="text-lg font-semibold text-gray-800">
-                  {filteredAds.length} annonce{filteredAds.length !== 1 ? 's' : ''} trouvée{filteredAds.length !== 1 ? 's' : ''}
-                </span>
-                {searchTerm && (
-                  <span className="text-gray-600 ml-2">
-                    pour "{searchTerm}"
+            <div className="mt-4 pt-4 border-top">
+              <div className="d-flex justify-content-between align-items-center">
+                <div>
+                  <span className="h5 fw-semibold text-dark">
+                    {filteredAds.length} annonce{filteredAds.length !== 1 ? 's' : ''} trouvée{filteredAds.length !== 1 ? 's' : ''}
                   </span>
-                )}
-              </div>
-              <div className="text-gray-600">
-                <button 
-                  className="text-blue-600 hover:text-blue-800"
-                  onClick={loadAds}
-                >
-                  <i className="bi bi-arrow-clockwise me-1"></i>
-                  Actualiser
-                </button>
+                  {searchTerm && (
+                    <span className="text-muted ms-2">
+                      pour "{searchTerm}"
+                    </span>
+                  )}
+                </div>
+                <div className="d-flex gap-2">
+                  <button 
+                    className="btn btn-outline-primary btn-sm"
+                    onClick={loadAds}
+                  >
+                    <i className="bi bi-arrow-clockwise me-1"></i>
+                    Actualiser
+                  </button>
+                </div>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Liste des annonces */}
+        {/* Contenu principal */}
         {error ? (
-          <div className="text-center py-16 bg-white rounded-xl shadow-sm">
-            <div className="max-w-md mx-auto">
-              <i className="bi bi-exclamation-triangle text-5xl text-red-500 mb-4"></i>
-              <h3 className="text-2xl font-bold text-gray-800 mb-2">Erreur de chargement</h3>
-              <p className="text-gray-600 mb-6">{error}</p>
-              <button 
-                className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
-                onClick={loadAds}
-              >
-                <i className="bi bi-arrow-clockwise me-2"></i>
-                Réessayer
-              </button>
-            </div>
-          </div>
+          <ErrorDisplay />
         ) : filteredAds.length === 0 ? (
-          <div className="text-center py-16 bg-white rounded-xl shadow-sm">
-            <div className="max-w-md mx-auto">
-              <i className="bi bi-inbox text-5xl text-gray-400 mb-4"></i>
-              <h3 className="text-2xl font-bold text-gray-800 mb-2">Aucune annonce trouvée</h3>
-              <p className="text-gray-600 mb-6">
-                {searchTerm || typeFilter !== 'all' || currencyFilter !== 'all' || statusFilter !== 'all'
-                  ? 'Ajustez vos critères de recherche'
-                  : 'Aucune annonce active pour le moment'}
-              </p>
-              <div className="space-x-3">
-                {(searchTerm || typeFilter !== 'all' || currencyFilter !== 'all' || statusFilter !== 'all') && (
-                  <button 
-                    className="px-6 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-700 transition"
-                    onClick={() => {
-                      setSearchTerm('');
-                      setTypeFilter('all');
-                      setCurrencyFilter('all');
-                      setStatusFilter('all');
-                    }}
-                  >
-                    Réinitialiser les filtres
-                  </button>
-                )}
-                {isAuthenticated && (
-                  <button 
-                    className="px-6 py-2 bg-yellow-500 text-black font-semibold rounded-lg hover:bg-yellow-400 transition"
-                    onClick={() => navigate('/dashboard/ads/create')}
-                  >
-                    <i className="bi bi-plus-circle me-2"></i>
-                    Créer une annonce
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
+          <EmptyState />
         ) : (
           <>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="row g-4">
               {filteredAds.map((ad) => {
                 const isUserAd = user && ad.user.id === user.id;
                 const isSellAd = ad.type === 'sell';
                 const statusBadge = getStatusBadge(ad.status);
                 const isTransactionActive = activeTransactions.has(ad.id);
-                const isAdModifying = modifyingAd === ad.id;
                 
-                // DEBUG: Log pour voir pourquoi les boutons n'apparaissent pas
-                console.log('🔍 DEBUG Ad:', {
-                  id: ad.id,
-                  isUserAd,
-                  userAdId: ad.user?.id,
-                  currentUserId: user?.id,
-                  status: ad.status,
-                  isExpired: ad.isExpired,
-                  shouldShowBuySell: !isUserAd && ad.status === 'active' && !ad.isExpired
-                });
-
                 return (
-                  <div key={ad.id} className="bg-white rounded-xl shadow-md hover:shadow-xl transition-all duration-300 border border-gray-200 hover:border-blue-300">
-                    <div className="p-6 border-b border-gray-100">
-                      <div className="flex justify-between items-start mb-4">
-                        <div>
-                          <div className="flex flex-wrap gap-2 mb-2">
-                            <span className={`inline-block px-3 py-1 rounded-full text-sm font-semibold ${ad.type === 'buy' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                              {ad.type === 'buy' ? '🛒 ACHAT' : '💰 VENTE'}
-                            </span>
-                            <span className={`inline-block px-3 py-1 rounded-full text-sm font-semibold ${statusBadge.class}`}>
-                              <i className={`bi ${statusBadge.icon} me-1`}></i>
-                              {statusBadge.text}
-                            </span>
-                            {ad.isExpired && (
-                              <span className="inline-block px-3 py-1 rounded-full text-sm font-semibold bg-gray-800 text-white">
-                                <i className="bi bi-alarm me-1"></i>
-                                Expiré
+                  <div key={ad.id} className="col-12 col-md-6 col-lg-4">
+                    <div className="card h-100 shadow-sm border-0 hover-shadow transition-all ad-card">
+                      <div className="card-body p-4">
+                        {/* En-tête */}
+                        <div className="d-flex justify-content-between align-items-start mb-3">
+                          <div>
+                            <div className="d-flex flex-wrap gap-2 mb-2">
+                              <span className={`badge ${ad.type === 'buy' ? 'bg-success' : 'bg-danger'}`}>
+                                {ad.type === 'buy' ? '🛒 ACHAT' : '💰 VENTE'}
                               </span>
-                            )}
+                              <span className={`badge ${statusBadge.class}`}>
+                                <i className={`bi ${statusBadge.icon} me-1`}></i>
+                                {statusBadge.text}
+                              </span>
+                              {ad.isExpired && (
+                                <span className="badge bg-dark">
+                                  <i className="bi bi-alarm me-1"></i>
+                                  Expiré
+                                </span>
+                              )}
+                            </div>
+                            <div className="small text-muted">
+                              <i className="bi bi-clock me-1"></i>
+                              {formatDate(ad.createdAt)}
+                              {ad.timeLimitMinutes && (
+                                <span className="ms-2">
+                                  <i className="bi bi-hourglass-split me-1"></i>
+                                  {ad.timeLimitMinutes >= 1440 
+                                    ? `${Math.floor(ad.timeLimitMinutes / 1440)}j`
+                                    : ad.timeLimitMinutes >= 60
+                                      ? `${Math.floor(ad.timeLimitMinutes / 60)}h`
+                                      : `${ad.timeLimitMinutes}min`
+                                  }
+                                </span>
+                              )}
+                            </div>
                           </div>
-                          <div className="text-sm text-gray-500">
-                            <i className="bi bi-clock me-1"></i>
-                            {formatDate(ad.createdAt)}
-                            {ad.timeLimitMinutes && (
-                              <span className="ms-2">
-                                <i className="bi bi-hourglass-split me-1"></i>
-                                {ad.timeLimitMinutes >= 1440 
-                                  ? `${Math.floor(ad.timeLimitMinutes / 1440)}j`
-                                  : ad.timeLimitMinutes >= 60
-                                    ? `${Math.floor(ad.timeLimitMinutes / 60)}h`
-                                    : `${ad.timeLimitMinutes}min`
-                                }
-                              </span>
-                            )}
+                          <div className="text-end">
+                            <div className="h3 fw-bold text-primary">
+                              {formatPrice(ad.price)} MAD
+                            </div>
+                            <div className="text-muted small">/{ad.currency?.code}</div>
                           </div>
                         </div>
-                        <div className="text-right">
-                          <div className="text-2xl font-bold text-blue-600">
-                            {formatPrice(ad.price)} MAD
-                          </div>
-                          <div className="text-gray-500">/{ad.currency?.code}</div>
+                        
+                        {/* Titre */}
+                        <h5 className="card-title fw-bold text-dark mb-3">
+                          {ad.type === 'buy' ? 'Achat de' : 'Vente de'} {ad.amount} {ad.currency?.code}
+                        </h5>
+                        
+                        {/* Méthode de paiement */}
+                        <div className="d-flex align-items-center text-dark mb-3">
+                          <i className="bi bi-bank text-muted me-2"></i>
+                          <span className="fw-medium">{ad.paymentMethod}</span>
                         </div>
-                      </div>
-                      
-                      <h3 className="text-xl font-bold text-gray-900 mb-3">
-                        {ad.type === 'buy' ? 'Achat de' : 'Vente de'} {ad.amount} {ad.currency?.code}
-                      </h3>
-                      
-                      <div className="flex items-center text-gray-700 mb-3">
-                        <i className="bi bi-bank text-gray-500 me-2"></i>
-                        <span className="font-medium">{ad.paymentMethod}</span>
-                      </div>
-                      
-                      {ad.terms && (
+                        
+                        {/* Conditions */}
+                        {ad.terms && (
+                          <div className="mb-4">
+                            <div className="d-flex align-items-center text-muted mb-1">
+                              <i className="bi bi-chat-left-text me-2"></i>
+                              <span className="small fw-medium">Conditions</span>
+                            </div>
+                            <p className="text-muted small mb-0" style={{maxHeight: '3em', overflow: 'hidden'}}>
+                              {ad.terms}
+                            </p>
+                          </div>
+                        )}
+                        
+                        {/* Total */}
                         <div className="mb-4">
-                          <div className="flex items-center text-gray-600 mb-1">
-                            <i className="bi bi-chat-left-text me-2"></i>
-                            <span className="text-sm font-medium">Conditions</span>
+                          <div className="d-flex justify-content-between align-items-center mb-2">
+                            <span className="text-muted">Montant total</span>
+                            <span className="h4 fw-bold text-dark">
+                              {calculateTotal(ad).toLocaleString('fr-MA')} MAD
+                            </span>
                           </div>
-                          <p className="text-gray-600 text-sm line-clamp-2">
-                            {ad.terms}
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                    
-                    <div className="p-6 bg-gray-50 rounded-b-xl">
-                      <div className="mb-4">
-                        <div className="flex justify-between items-center mb-2">
-                          <span className="text-gray-600">Montant total</span>
-                          <span className="text-xl font-bold text-gray-900">
-                            {calculateTotal(ad).toLocaleString('fr-MA')} MAD
-                          </span>
+                          
+                          {/* Limites */}
+                          {(ad.minAmountPerTransaction || ad.maxAmountPerTransaction) && (
+                            <div className="small text-muted">
+                              <i className="bi bi-sliders me-1"></i>
+                              {ad.minAmountPerTransaction ? `Min: ${ad.minAmountPerTransaction}` : 'Sans min'} / 
+                              {ad.maxAmountPerTransaction ? ` Max: ${ad.maxAmountPerTransaction}` : 'Sans max'}
+                            </div>
+                          )}
                         </div>
                         
-                        {(ad.minAmountPerTransaction || ad.maxAmountPerTransaction) && (
-                          <div className="text-sm text-gray-500">
-                            <i className="bi bi-sliders me-1"></i>
-                            {ad.minAmountPerTransaction ? `Min: ${ad.minAmountPerTransaction}` : 'Sans min'} / 
-                            {ad.maxAmountPerTransaction ? ` Max: ${ad.maxAmountPerTransaction}` : 'Sans max'}
-                          </div>
-                        )}
-                      </div>
-                      
-                      <div className="flex justify-between items-center pt-4 border-t border-gray-200">
-                        <div>
-                          <div className="text-sm text-gray-600">
-                            {ad.type === 'buy' ? 'Acheteur' : 'Vendeur'}
-                          </div>
-                          <div className="flex items-center">
-                            <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center me-2">
-                              <i className="bi bi-person text-blue-600"></i>
-                            </div>
+                        {/* Vendeur/Acheteur + Actions */}
+                        <div className="border-top pt-3">
+                          <div className="d-flex justify-content-between align-items-center mb-3">
                             <div>
-                              <div className="font-semibold text-gray-900">
-                                {ad.user?.fullName || 'Anonyme'}
+                              <div className="small text-muted">
+                                {ad.type === 'buy' ? 'Acheteur' : 'Vendeur'}
                               </div>
-                              <div className="flex items-center text-yellow-500 text-sm">
-                                <i className="bi bi-star-fill me-1"></i>
-                                {ad.user?.reputation?.toFixed(1) || '5.0'}
-                                {ad.user?.isActive === false && (
-                                  <span className="ms-2 text-red-500">
-                                    <i className="bi bi-person-x me-1"></i>
-                                    Inactif
-                                  </span>
-                                )}
+                              <div className="d-flex align-items-center">
+                                <div className="bg-primary bg-opacity-10 rounded-circle p-2 me-2">
+                                  <i className="bi bi-person text-primary"></i>
+                                </div>
+                                <div>
+                                  <div className="fw-semibold text-dark">
+                                    {ad.user?.fullName || 'Anonyme'}
+                                  </div>
+                                  <div className="d-flex align-items-center text-warning small">
+                                    <i className="bi bi-star-fill me-1"></i>
+                                    {ad.user?.reputation?.toFixed(1) || '5.0'}
+                                  </div>
+                                </div>
                               </div>
-                            </div>
-                          </div>
-                        </div>
-                        
-                        <div className="text-right">
-                          <div className="text-sm text-gray-600">ID</div>
-                          <div className="font-mono text-gray-800">#{ad.id}</div>
-                        </div>
-                      </div>
-                      
-                      <div className="mt-6 space-y-3">
-                        {/* Boutons admin */}
-                        {isAdmin && (
-                          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
-                            {ad.status !== 'active' && ad.status !== 'expired' && (
-                              <button 
-                                className="px-3 py-2 bg-green-500 text-white text-sm rounded-lg hover:bg-green-600 transition disabled:opacity-50"
-                                onClick={() => handleAdminAction(ad.id, 'activate')}
-                                disabled={isAdModifying}
-                                title="Activer l'annonce"
-                              >
-                                {isAdModifying ? (
-                                  <span className="spinner-border spinner-border-sm"></span>
-                                ) : (
-                                  <i className="bi bi-play-circle"></i>
-                                )}
-                              </button>
-                            )}
-                            {ad.status === 'active' && !ad.isExpired && (
-                              <button 
-                                className="px-3 py-2 bg-yellow-500 text-white text-sm rounded-lg hover:bg-yellow-600 transition disabled:opacity-50"
-                                onClick={() => handleAdminAction(ad.id, 'pause')}
-                                disabled={isAdModifying}
-                                title="Mettre en pause"
-                              >
-                                {isAdModifying ? (
-                                  <span className="spinner-border spinner-border-sm"></span>
-                                ) : (
-                                  <i className="bi bi-pause-circle"></i>
-                                )}
-                              </button>
-                            )}
-                            <button 
-                              className="px-3 py-2 bg-red-500 text-white text-sm rounded-lg hover:bg-red-600 transition disabled:opacity-50"
-                              onClick={() => handleAdminAction(ad.id, 'suspend')}
-                              disabled={isAdModifying}
-                              title="Suspendre l'annonce"
-                            >
-                              {isAdModifying ? (
-                                <span className="spinner-border spinner-border-sm"></span>
-                              ) : (
-                                <i className="bi bi-slash-circle"></i>
-                              )}
-                            </button>
-                            <button 
-                              className="px-3 py-2 bg-gray-800 text-white text-sm rounded-lg hover:bg-gray-900 transition disabled:opacity-50"
-                              onClick={() => handleDeleteAd(ad.id)}
-                              disabled={isAdModifying}
-                              title="Supprimer définitivement"
-                            >
-                              {isAdModifying ? (
-                                <span className="spinner-border spinner-border-sm"></span>
-                              ) : (
-                                <i className="bi bi-trash"></i>
-                              )}
-                            </button>
-                          </div>
-                        )}
-                        
-                        {/* Boutons utilisateur */}
-                        {isAuthenticated ? (
-                          <>
-                            {/* MODIFICATION IMPORTANTE : Montrer toujours les boutons pour debug */}
-                            <div className="space-y-2">
-                              {/* Pour les annonces de VENTE : bouton ACHETER */}
-                              {isSellAd && (
-                                <button 
-                                  className="w-full py-3 bg-gradient-to-r from-green-600 to-green-700 text-white font-bold rounded-lg hover:from-green-700 hover:to-green-800 transition shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
-                                  onClick={() => handleBuyAd(ad)}
-                                  disabled={!!(isTransactionActive || isAdModifying || isUserAd)}
-                                  title={isUserAd ? 'Vous ne pouvez pas acheter votre propre annonce' : `Acheter ${ad.amount} ${ad.currency.code} pour ${calculateTotal(ad)} MAD`}
-                                >
-                                  {isTransactionActive ? (
-                                    <>
-                                      <span className="spinner-border spinner-border-sm me-2"></span>
-                                      Création transaction...
-                                    </>
-                                  ) : isUserAd ? (
-                                    'Votre annonce'
-                                  ) : (
-                                    <>
-                                      🛒 Acheter maintenant
-                                      <br />
-                                      <small className="text-xs opacity-75">
-                                        Total: {calculateTotal(ad).toLocaleString('fr-MA')} MAD
-                                      </small>
-                                    </>
-                                  )}
-                                </button>
-                              )}
-                              
-                              {/* Pour les annonces d'ACHAT : bouton VENDRE */}
-                              {!isSellAd && (
-                                <button 
-                                  className="w-full py-3 bg-gradient-to-r from-orange-600 to-orange-700 text-white font-bold rounded-lg hover:from-orange-700 hover:to-orange-800 transition shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
-                                  onClick={() => handleBuyAd(ad)}
-                                  disabled={!!(isTransactionActive || isAdModifying || isUserAd)}
-                                  title={isUserAd ? 'Vous ne pouvez pas vendre à votre propre annonce' : `Vendre ${ad.amount} ${ad.currency.code} pour ${calculateTotal(ad)} MAD`}
-                                >
-                                  {isTransactionActive ? (
-                                    <>
-                                      <span className="spinner-border spinner-border-sm me-2"></span>
-                                      Création transaction...
-                                    </>
-                                  ) : isUserAd ? (
-                                    'Votre annonce'
-                                  ) : (
-                                    <>
-                                      💰 Vendre à cet acheteur
-                                      <br />
-                                      <small className="text-xs opacity-75">
-                                        Total: {calculateTotal(ad).toLocaleString('fr-MA')} MAD
-                                      </small>
-                                    </>
-                                  )}
-                                </button>
-                              )}
                             </div>
                             
-                            <div className="grid grid-cols-2 gap-2">
-                              <button 
-                                className="py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white font-medium rounded-lg hover:from-blue-700 hover:to-blue-800 transition disabled:opacity-50"
-                                onClick={() => handleContactSeller(ad)}
-                                disabled={isAdModifying}
-                              >
-                                <i className="bi bi-chat me-2"></i>
-                                Contacter
-                              </button>
-                              
-                              <button 
-                                className="py-2 border border-blue-600 text-blue-600 font-medium rounded-lg hover:bg-blue-50 transition disabled:opacity-50"
-                                onClick={() => handleCreateSimilarAd(ad)}
-                                disabled={isAdModifying}
-                              >
-                                <i className="bi bi-copy me-2"></i>
-                                Similaire
-                              </button>
+                            <div className="text-end">
+                              <div className="small text-muted">ID</div>
+                              <div className="fw-bold font-monospace">#{ad.id}</div>
                             </div>
-                          </>
-                        ) : (
-                          <>
-                            <button 
-                              className="w-full py-3 bg-gradient-to-r from-yellow-500 to-yellow-600 text-black font-bold rounded-lg hover:from-yellow-600 hover:to-yellow-700 transition shadow-md"
-                              onClick={() => {
-                                showNotification('info', 'Connectez-vous pour échanger !');
-                                navigate('/login', { state: { from: '/market' } });
-                              }}
-                            >
-                              🔐 Se connecter pour échanger
-                            </button>
-                            <div className="text-center text-gray-500 text-sm">
-                              <i className="bi bi-shield-check me-1"></i>
-                              Gratuit • Sécurisé • Rapide
-                            </div>
-                          </>
-                        )}
+                          </div>
+                          
+                          {/* Boutons d'action */}
+                          <div className="mt-4">
+                            {isAuthenticated ? (
+                              <>
+                                <div className="mb-3">
+                                  {isSellAd ? (
+                                    <button 
+                                      className={`btn w-100 ${isUserAd ? 'btn-secondary' : 'btn-success'}`}
+                                      onClick={() => handleBuyAd(ad)}
+                                      disabled={!!(isTransactionActive || modifyingAd === ad.id || isUserAd)}
+                                      title={isUserAd ? 'Vous ne pouvez pas acheter votre propre annonce' : `Acheter ${ad.amount} ${ad.currency.code}`}
+                                    >
+                                      {isTransactionActive ? (
+                                        <>
+                                          <span className="spinner-border spinner-border-sm me-2"></span>
+                                          Création transaction...
+                                        </>
+                                      ) : isUserAd ? (
+                                        'Votre annonce'
+                                      ) : (
+                                        <>
+                                          <i className="bi bi-cart me-2"></i>
+                                          Acheter maintenant
+                                          <br />
+                                          <small className="small">
+                                            Total: {calculateTotal(ad).toLocaleString('fr-MA')} MAD
+                                          </small>
+                                        </>
+                                      )}
+                                    </button>
+                                  ) : (
+                                    <button 
+                                      className={`btn w-100 ${isUserAd ? 'btn-secondary' : 'btn-warning'}`}
+                                      onClick={() => handleBuyAd(ad)}
+                                      disabled={!!(isTransactionActive || modifyingAd === ad.id || isUserAd)}
+                                      title={isUserAd ? 'Vous ne pouvez pas vendre à votre propre annonce' : `Vendre ${ad.amount} ${ad.currency.code}`}
+                                    >
+                                      {isTransactionActive ? (
+                                        <>
+                                          <span className="spinner-border spinner-border-sm me-2"></span>
+                                          Création transaction...
+                                        </>
+                                      ) : isUserAd ? (
+                                        'Votre annonce'
+                                      ) : (
+                                        <>
+                                          <i className="bi bi-currency-dollar me-2"></i>
+                                          Vendre à cet acheteur
+                                          <br />
+                                          <small className="small">
+                                            Total: {calculateTotal(ad).toLocaleString('fr-MA')} MAD
+                                          </small>
+                                        </>
+                                      )}
+                                    </button>
+                                  )}
+                                </div>
+                                
+                                <div className="row g-2">
+                                  <div className="col">
+                                    <button 
+                                      className="btn btn-primary w-100"
+                                      onClick={() => handleContactSeller(ad)}
+                                      disabled={modifyingAd === ad.id}
+                                    >
+                                      <i className="bi bi-chat me-2"></i>
+                                      Contacter
+                                    </button>
+                                  </div>
+                                  <div className="col">
+                                    <button 
+                                      className="btn btn-outline-primary w-100"
+                                      onClick={() => handleCreateSimilarAd(ad)}
+                                      disabled={modifyingAd === ad.id}
+                                    >
+                                      <i className="bi bi-copy me-2"></i>
+                                      Similaire
+                                    </button>
+                                  </div>
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <button 
+                                  className="btn btn-warning w-100 mb-2 fw-bold"
+                                  onClick={() => {
+                                    showNotification('info', 'Connectez-vous pour échanger !');
+                                    navigate('/login', { state: { from: '/market' } });
+                                  }}
+                                >
+                                  <i className="bi bi-shield-lock me-2"></i>
+                                  Se connecter pour échanger
+                                </button>
+                                <div className="text-center text-muted small">
+                                  <i className="bi bi-shield-check me-1"></i>
+                                  Gratuit • Sécurisé • Rapide
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1218,27 +1300,28 @@ const PublicAdList: React.FC = () => {
               })}
             </div>
             
+            {/* CTA pour les non-connectés */}
             {!isAuthenticated && filteredAds.length > 0 && (
-              <div className="mt-12 bg-gradient-to-r from-blue-900 to-purple-800 rounded-2xl p-8 text-center text-white shadow-xl">
-                <div className="max-w-3xl mx-auto">
-                  <h3 className="text-2xl font-bold mb-4">
+              <div className="card bg-primary text-white mt-5 border-0 shadow-lg">
+                <div className="card-body p-5 text-center">
+                  <h3 className="card-title h2 fw-bold mb-3">
                     Prêt à commencer à échanger ?
                   </h3>
-                  <p className="text-blue-100 mb-6">
+                  <p className="card-text mb-4 opacity-75">
                     Rejoignez {filteredAds.length} annonces actives et des milliers d'utilisateurs 
                     qui échangent en toute confiance.
                   </p>
-                  <div className="flex flex-col md:flex-row gap-4 justify-center">
+                  <div className="d-flex flex-column flex-md-row gap-3 justify-content-center">
                     <Link 
                       to="/register" 
-                      className="px-8 py-3 bg-white text-blue-900 font-bold rounded-lg hover:bg-gray-100 transition shadow-lg"
+                      className="btn btn-light text-primary fw-bold px-4 py-3"
                     >
                       <i className="bi bi-rocket me-2"></i>
                       Créer un compte gratuit
                     </Link>
                     <Link 
                       to="/login" 
-                      className="px-8 py-3 border-2 border-white text-white font-bold rounded-lg hover:bg-white hover:text-blue-900 transition"
+                      className="btn btn-outline-light fw-bold px-4 py-3"
                     >
                       <i className="bi bi-box-arrow-in-right me-2"></i>
                       Se connecter
@@ -1247,36 +1330,30 @@ const PublicAdList: React.FC = () => {
                 </div>
               </div>
             )}
-            
-            <div className="mt-12 grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="bg-white p-6 rounded-xl shadow-sm text-center">
-                <div className="text-3xl font-bold text-green-600">
-                  {ads.filter(a => a.type === 'buy').length}
-                </div>
-                <div className="text-gray-600">Demandes d'achat</div>
-              </div>
-              <div className="bg-white p-6 rounded-xl shadow-sm text-center">
-                <div className="text-3xl font-bold text-red-600">
-                  {ads.filter(a => a.type === 'sell').length}
-                </div>
-                <div className="text-gray-600">Offres de vente</div>
-              </div>
-              <div className="bg-white p-6 rounded-xl shadow-sm text-center">
-                <div className="text-3xl font-bold text-blue-600">
-                  {ads.filter(a => a.status === 'active').length}
-                </div>
-                <div className="text-gray-600">Annonces actives</div>
-              </div>
-              <div className="bg-white p-6 rounded-xl shadow-sm text-center">
-                <div className="text-3xl font-bold text-purple-600">
-                  {ads.reduce((total, ad) => total + calculateTotal(ad), 0).toLocaleString('fr-MA').split(',')[0]}K
-                </div>
-                <div className="text-gray-600">MAD en circulation</div>
-              </div>
-            </div>
           </>
         )}
       </div>
+
+      {/* Styles inline */}
+      <style>{`
+        .hover-shadow:hover {
+          box-shadow: 0 .5rem 1rem rgba(0,0,0,.15)!important;
+          transform: translateY(-2px);
+          transition: all 0.3s ease;
+        }
+        
+        .transition-all {
+          transition: all 0.3s ease;
+        }
+        
+        .ad-card {
+          border: 1px solid rgba(0,0,0,.125);
+        }
+        
+        .ad-card:hover {
+          border-color: #0d6efd;
+        }
+      `}</style>
     </div>
   );
 };
