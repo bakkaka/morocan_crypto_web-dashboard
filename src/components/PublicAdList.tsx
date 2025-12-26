@@ -1,4 +1,4 @@
-// src/components/PublicAdList.tsx - VERSION FINALE AVEC WHATSAPP ET 72H
+// src/components/PublicAdList.tsx - VERSION FINALE COMPLÈTE
 import React, { useEffect, useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -11,10 +11,12 @@ import api from '../api/axiosConfig';
 interface User {
   id: number;
   fullName: string;
+  username?: string;
   reputation: number;
   email?: string;
   isActive?: boolean;
   phone?: string;
+  isVerified?: boolean;
 }
 
 interface Currency {
@@ -34,7 +36,8 @@ interface Ad {
   paymentMethod: string;
   user: User;
   createdAt: string;
-  timeLimitMinutes: number;
+  updatedAt?: string;
+  timeLimitMinutes?: number;
   terms?: string;
   minAmountPerTransaction?: number;
   maxAmountPerTransaction?: number;
@@ -58,7 +61,7 @@ const PublicAdList: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | 'buy' | 'sell'>('all');
   const [currencyFilter, setCurrencyFilter] = useState<string>('all');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<string>('active');
   const [sortBy, setSortBy] = useState<'price' | 'amount' | 'created' | 'reputation'>('created');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [creatingTransaction, setCreatingTransaction] = useState<number | null>(null);
@@ -100,7 +103,9 @@ const PublicAdList: React.FC = () => {
       return date.toLocaleDateString('fr-MA', {
         day: '2-digit',
         month: 'short',
-        year: 'numeric'
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
       });
     } catch {
       return 'Date inconnue';
@@ -118,37 +123,13 @@ const PublicAdList: React.FC = () => {
 
   const getStatusBadge = (status: string) => {
     switch (status) {
-      case 'active': return { class: 'bg-success', text: 'Actif', icon: 'bi-check-circle' };
-      case 'paused': return { class: 'bg-warning text-dark', text: 'En pause', icon: 'bi-pause-circle' };
-      case 'pending': return { class: 'bg-info', text: 'En attente', icon: 'bi-clock' };
+      case 'active': return { class: 'bg-success', text: 'Actif', icon: 'bi-check-circle-fill' };
+      case 'paused': return { class: 'bg-warning text-dark', text: 'En pause', icon: 'bi-pause-circle-fill' };
+      case 'pending': return { class: 'bg-info', text: 'En attente', icon: 'bi-clock-fill' };
       case 'completed': return { class: 'bg-secondary', text: 'Terminé', icon: 'bi-check-all' };
-      case 'cancelled': return { class: 'bg-danger', text: 'Annulé', icon: 'bi-x-circle' };
-      default: return { class: 'bg-secondary', text: 'Inconnu', icon: 'bi-question-circle' };
+      case 'cancelled': return { class: 'bg-danger', text: 'Annulé', icon: 'bi-x-circle-fill' };
+      default: return { class: 'bg-secondary', text: 'Inconnu', icon: 'bi-question-circle-fill' };
     }
-  };
-
-  const getTimeRemaining = (createdAt: string, timeLimitMinutes: number): string => {
-    const created = new Date(createdAt);
-    const expiresAt = new Date(created.getTime() + (timeLimitMinutes * 60000));
-    const now = new Date();
-    const diffMs = expiresAt.getTime() - now.getTime();
-    
-    if (diffMs <= 0) return 'Expiré';
-    
-    const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffHours / 24);
-    
-    if (diffDays > 0) return `${diffDays}j ${diffHours % 24}h restantes`;
-    if (diffHours > 0) return `${diffHours}h restantes`;
-    
-    const diffMins = Math.floor(diffMs / 60000);
-    return `${diffMins}min restantes`;
-  };
-
-  const isAdExpired = (createdAt: string, timeLimitMinutes: number): boolean => {
-    const created = new Date(createdAt);
-    const expiresAt = new Date(created.getTime() + (timeLimitMinutes * 60000));
-    return expiresAt < new Date();
   };
 
   // ============================================
@@ -161,23 +142,21 @@ const PublicAdList: React.FC = () => {
       return;
     }
     
-    // Nettoyer le numéro de téléphone
     let phone = ad.user.phone.replace(/\s+/g, '').replace('+', '');
     
-    // S'assurer que c'est un numéro marocain
     if (phone.startsWith('0')) {
       phone = '212' + phone.substring(1);
     } else if (!phone.startsWith('212')) {
       phone = '212' + phone;
     }
     
-    // Message par défaut
     const message = encodeURIComponent(
       `Bonjour ${ad.user.fullName},\n\n` +
       `Je suis intéressé par votre annonce sur CryptoMaroc P2P :\n` +
       `- ${ad.type === 'buy' ? 'Achat' : 'Vente'} de ${ad.amount} ${ad.currency.code}\n` +
       `- Prix : ${ad.price} MAD/${ad.currency.code}\n` +
-      `- Total : ${calculateTotal(ad)} MAD\n\n` +
+      `- Total : ${calculateTotal(ad)} MAD\n` +
+      `- Méthode : ${ad.paymentMethod}\n\n` +
       `Pouvons-nous discuter de cette transaction ?`
     );
     
@@ -185,21 +164,56 @@ const PublicAdList: React.FC = () => {
     window.open(whatsappUrl, '_blank');
   };
 
-  const handlePrivateMessage = (ad: Ad) => {
-    if (!isAuthenticated) {
+  const handlePrivateMessage = async (ad: Ad) => {
+    if (!isAuthenticated || !user) {
       showNotification('warning', 'Connectez-vous pour envoyer un message !');
       navigate('/login', { state: { from: '/market' } });
       return;
     }
-    
-    navigate('/dashboard/messages', { 
-      state: { 
-        recipientId: ad.user.id,
-        recipientName: ad.user.fullName,
-        adId: ad.id,
-        subject: `Annonce #${ad.id} - ${ad.type === 'buy' ? 'Achat' : 'Vente'} ${ad.amount} ${ad.currency.code}`
-      }
-    });
+
+    // Créer d'abord une transaction
+    try {
+      const transactionData = {
+        ad: ad['@id'] || `/api/ads/${ad.id}`,
+        buyer: ad.type === 'sell' ? `/api/users/${user.id}` : `/api/users/${ad.user.id}`,
+        seller: ad.type === 'sell' ? `/api/users/${ad.user.id}` : `/api/users/${user.id}`,
+        usdtAmount: ad.amount,
+        fiatAmount: calculateTotal(ad),
+        status: 'pending',
+        paymentReference: `CHAT-${Date.now()}`
+      };
+
+      showNotification('info', 'Création de la transaction...');
+      
+      const transactionResponse = await api.post('/api/transactions', transactionData);
+      const transaction = transactionResponse.data;
+      
+      // Maintenant créer un message dans la base de données
+      const messageData = {
+        transaction: `/api/transactions/${transaction.id}`,
+        sender: `/api/users/${user.id}`,
+        message: `Bonjour ${ad.user.fullName}, je suis intéressé par votre annonce #${ad.id}`
+      };
+      
+      await api.post('/api/chat_messages', messageData);
+      
+      // Rediriger vers la page de messages avec la transaction créée
+      navigate('/dashboard/messages', { 
+        state: { 
+          transactionId: transaction.id,
+          recipientId: ad.user.id,
+          recipientName: ad.user.fullName,
+          adId: ad.id,
+          autoFocus: true
+        }
+      });
+      
+      showNotification('success', 'Conversation créée ! Vous pouvez maintenant discuter avec le vendeur.');
+      
+    } catch (err: any) {
+      console.error('❌ Erreur création conversation:', err);
+      showNotification('error', 'Erreur lors de la création de la conversation');
+    }
   };
 
   // ============================================
@@ -214,22 +228,23 @@ const PublicAdList: React.FC = () => {
       console.log('🌐 Chargement des annonces...');
       
       const endpoints = [
-        '/ads',
         '/api/ads',
-        '/public/ads',
+        '/ads',
         '/api/public/ads',
-        '/annonces',
-        '/api/annonces'
+        '/public/ads'
       ];
 
       const params: any = {
         page: 1,
         itemsPerPage: 100,
-        'order[createdAt]': 'desc'
+        'order[createdAt]': 'desc',
+        'exists[user]': true
       };
 
       if (!isAdmin) {
         params.status = 'active';
+      } else if (statusFilter !== 'all') {
+        params.status = statusFilter;
       }
 
       let response = null;
@@ -247,7 +262,7 @@ const PublicAdList: React.FC = () => {
       }
 
       if (!response) {
-        throw new Error('Impossible de se connecter à l\'API des annonces');
+        throw new Error('Impossible de charger les annonces');
       }
 
       const responseData = response.data;
@@ -259,33 +274,12 @@ const PublicAdList: React.FC = () => {
         adsData = responseData;
       } else if (responseData.data && Array.isArray(responseData.data)) {
         adsData = responseData.data;
-      } else if (responseData.items && Array.isArray(responseData.items)) {
-        adsData = responseData.items;
-      } else if (responseData.member && Array.isArray(responseData.member)) {
-        adsData = responseData.member;
       }
       
       console.log(`📊 ${adsData.length} annonces récupérées`);
 
-      // TRANSFORMATION DES DONNÉES AVEC 72H PAR DÉFAUT
-      const formattedAds: Ad[] = adsData.map((ad: any, index: number) => {
-        // Définir 72 heures par défaut (4320 minutes)
-        const defaultTimeLimit = 4320; // 72 heures
-        
-        const adData = {
-          id: ad.id || index + 1,
-          type: ad.type || 'buy',
-          amount: parseFloat(ad.amount) || 0,
-          price: parseFloat(ad.price) || 0,
-          status: ad.status || 'active',
-          paymentMethod: ad.paymentMethod || ad.payment_method || 'Non spécifié',
-          createdAt: ad.createdAt || ad.created_at || new Date().toISOString(),
-          timeLimitMinutes: ad.timeLimitMinutes || ad.time_limit_minutes || defaultTimeLimit,
-          terms: ad.terms,
-          minAmountPerTransaction: ad.minAmountPerTransaction || ad.min_amount_per_transaction,
-          maxAmountPerTransaction: ad.maxAmountPerTransaction || ad.max_amount_per_transaction,
-        };
-        
+      // TRANSFORMATION DES DONNÉES
+      const formattedAds: Ad[] = adsData.map((ad: any) => {
         // Utilisateur
         let userData: User = { 
           id: 0, 
@@ -298,9 +292,11 @@ const PublicAdList: React.FC = () => {
             userData = {
               id: ad.user.id || 0,
               fullName: ad.user.fullName || ad.user.full_name || ad.user.username || 'Utilisateur',
+              username: ad.user.username,
               reputation: ad.user.reputation || 5.0,
               email: ad.user.email,
               phone: ad.user.phone,
+              isVerified: ad.user.isVerified || false,
               isActive: ad.user.isActive !== false
             };
           }
@@ -329,26 +325,26 @@ const PublicAdList: React.FC = () => {
         }
         
         return {
-          ...adData,
-          '@id': ad['@id'] || `/api/ads/${adData.id}`,
+          id: ad.id || 0,
+          '@id': ad['@id'] || `/api/ads/${ad.id}`,
+          type: ad.type || 'buy',
+          amount: parseFloat(ad.amount) || 0,
+          price: parseFloat(ad.price) || 0,
+          currency: currencyData,
+          status: ad.status || 'active',
+          paymentMethod: ad.paymentMethod || ad.payment_method || 'Non spécifié',
           user: userData,
-          currency: currencyData
+          createdAt: ad.createdAt || ad.created_at || new Date().toISOString(),
+          updatedAt: ad.updatedAt || ad.updated_at,
+          timeLimitMinutes: ad.timeLimitMinutes || ad.time_limit_minutes,
+          terms: ad.terms,
+          minAmountPerTransaction: ad.minAmountPerTransaction || ad.min_amount_per_transaction,
+          maxAmountPerTransaction: ad.maxAmountPerTransaction || ad.max_amount_per_transaction
         };
-      });
+      }).filter(ad => ad.id > 0); // Filtrer les annonces valides
 
-      // FILTRER LES ANNONCES EXPIRÉES POUR LES NON-ADMINS
-      const now = new Date();
-      const filteredAds = isAdmin 
-        ? formattedAds 
-        : formattedAds.filter(ad => {
-            if (ad.status !== 'active') return false;
-            const created = new Date(ad.createdAt);
-            const expiresAt = new Date(created.getTime() + (ad.timeLimitMinutes * 60000));
-            return expiresAt > now; // Ne garder que les non-expirées
-          });
-
-      console.log(`✅ ${filteredAds.length} annonces actives`);
-      setAds(filteredAds);
+      console.log(`✅ ${formattedAds.length} annonces formatées`);
+      setAds(formattedAds);
 
     } catch (err: any) {
       console.error('❌ Erreur chargement annonces:', err);
@@ -358,8 +354,6 @@ const PublicAdList: React.FC = () => {
         errorMsg = 'Aucune annonce disponible pour le moment.';
         setAds([]);
         setError(null);
-      } else if (err.message.includes('CORS')) {
-        errorMsg = 'Erreur de connexion au serveur.';
       }
       
       setError(errorMsg);
@@ -369,27 +363,19 @@ const PublicAdList: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [isAdmin, showNotification]);
+  }, [isAdmin, statusFilter, showNotification]);
 
   useEffect(() => {
     loadAds();
-    
-    const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        loadAds();
-      }
-    }, 30000);
-    
-    return () => clearInterval(interval);
   }, [loadAds]);
 
   // ============================================
-  // GESTION DES TRANSACTIONS
+  // CRÉATION DE TRANSACTION + MESSAGE
   // ============================================
 
-  const handleBuyAd = async (ad: Ad) => {
+  const handleCreateTransaction = async (ad: Ad) => {
     if (!isAuthenticated || !user) {
-      showNotification('warning', 'Connectez-vous pour échanger !');
+      showNotification('warning', 'Connectez-vous pour créer une transaction !');
       navigate('/login', { state: { from: '/market' } });
       return;
     }
@@ -404,19 +390,14 @@ const PublicAdList: React.FC = () => {
       return;
     }
 
-    // Vérifier si l'annonce n'est pas expirée
-    if (isAdExpired(ad.createdAt, ad.timeLimitMinutes)) {
-      showNotification('error', 'Cette annonce a expiré');
-      loadAds();
-      return;
-    }
-
     const actionType = ad.type === 'sell' ? 'l\'achat' : 'la vente';
     if (!window.confirm(
-      `Confirmer ${actionType} de ${ad.amount} ${ad.currency.code} à ${ad.price} MAD ?\n\n` +
+      `Confirmer ${actionType} de ${ad.amount} ${ad.currency.code} ?\n\n` +
+      `Prix: ${ad.price} MAD/${ad.currency.code}\n` +
       `Total: ${calculateTotal(ad).toLocaleString('fr-MA')} MAD\n` +
       `${ad.type === 'sell' ? 'Vendeur' : 'Acheteur'}: ${ad.user.fullName}\n` +
-      `Méthode: ${ad.paymentMethod}`
+      `Méthode: ${ad.paymentMethod}\n\n` +
+      `Une transaction sera créée et vous serez redirigé vers le chat.`
     )) {
       return;
     }
@@ -424,43 +405,60 @@ const PublicAdList: React.FC = () => {
     try {
       setActiveTransactions(prev => new Set(prev).add(ad.id));
       setCreatingTransaction(ad.id);
-      
+
+      showNotification('info', 'Création de la transaction...');
+
+      // 1. Créer la transaction
       const transactionData = {
         ad: ad['@id'] || `/api/ads/${ad.id}`,
         buyer: ad.type === 'sell' ? `/api/users/${user.id}` : `/api/users/${ad.user.id}`,
         seller: ad.type === 'sell' ? `/api/users/${ad.user.id}` : `/api/users/${user.id}`,
         usdtAmount: ad.amount,
         fiatAmount: calculateTotal(ad),
-        status: 'pending'
+        status: 'pending',
+        paymentReference: `TRX-${Date.now()}-${ad.id}`,
+        expiresAt: new Date(Date.now() + 30 * 60000).toISOString() // 30 minutes
       };
 
       console.log('🔄 Création transaction:', transactionData);
 
-      const endpoints = ['/transactions', '/api/transactions'];
-      let response = null;
+      const transactionResponse = await api.post('/api/transactions', transactionData);
+      const transaction = transactionResponse.data;
       
-      for (const endpoint of endpoints) {
-        try {
-          response = await api.post(endpoint, transactionData);
-          break;
-        } catch (err) {
-          continue;
-        }
-      }
+      console.log('✅ Transaction créée:', transaction);
 
-      if (!response) {
-        throw new Error('Aucun endpoint transaction ne fonctionne');
-      }
+      // 2. Créer le premier message dans la base de données
+      const messageData = {
+        transaction: `/api/transactions/${transaction.id}`,
+        sender: `/api/users/${user.id}`,
+        message: `Bonjour ${ad.user.fullName} !\n\n` +
+                `Je souhaite ${ad.type === 'sell' ? 'acheter' : 'vous vendre'} ${ad.amount} ${ad.currency.code}.\n` +
+                `Prix: ${ad.price} MAD/${ad.currency.code}\n` +
+                `Total: ${calculateTotal(ad)} MAD\n` +
+                `Méthode: ${ad.paymentMethod}\n\n` +
+                `Pouvons-nous discuter des détails ?`
+      };
 
-      const transaction = response.data;
-      
+      await api.post('/api/chat_messages', messageData);
+      console.log('✅ Message créé dans la BDD');
+
       showNotification('success', 
-        `Transaction créée !\nID: ${transaction.id}\nRedirection vers la page de paiement...`
+        `Transaction créée !\nID: ${transaction.id}\nRedirection vers le chat...`
       );
-      
+
+      // 3. Rediriger vers la page de messages
       setTimeout(() => {
-        navigate(`/dashboard/transactions/${transaction.id}`);
-      }, 2000);
+        navigate('/dashboard/messages', { 
+          state: { 
+            transactionId: transaction.id,
+            recipientId: ad.user.id,
+            recipientName: ad.user.fullName,
+            adId: ad.id,
+            autoFocus: true,
+            initialMessage: `Transaction #${transaction.id} - ${ad.type === 'sell' ? 'Achat' : 'Vente'} ${ad.amount} ${ad.currency.code}`
+          }
+        });
+      }, 1500);
 
     } catch (err: any) {
       console.error('❌ Erreur création transaction:', err);
@@ -472,6 +470,8 @@ const PublicAdList: React.FC = () => {
       if (err.response?.status === 404) errorMessage = 'Annonce non trouvée';
       if (err.response?.status === 409) errorMessage = 'Transaction déjà existante';
       if (err.code === 'ERR_NETWORK') errorMessage = 'Erreur de connexion';
+      if (err.response?.data?.detail) errorMessage = err.response.data.detail;
+      if (err.response?.data?.message) errorMessage = err.response.data.message;
       
       showNotification('error', errorMessage);
       
@@ -496,12 +496,17 @@ const PublicAdList: React.FC = () => {
         (ad.paymentMethod?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
         (ad.terms?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
         (ad.user?.fullName?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+        (ad.user?.username?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
         ad.id.toString().includes(searchTerm);
       
       const matchesType = typeFilter === 'all' || ad.type === typeFilter;
       const matchesCurrency = currencyFilter === 'all' || 
         (ad.currency?.code?.toLowerCase() || '') === currencyFilter.toLowerCase();
       const matchesStatus = statusFilter === 'all' || ad.status === statusFilter;
+      
+      if (!isAdmin && statusFilter === 'all') {
+        return matchesSearch && matchesType && matchesCurrency && ad.status === 'active';
+      }
       
       return matchesSearch && matchesType && matchesCurrency && matchesStatus;
     })
@@ -543,6 +548,7 @@ const PublicAdList: React.FC = () => {
               <span className="visually-hidden">Chargement...</span>
             </div>
             <h3 className="text-dark mb-2">Chargement du marketplace...</h3>
+            <p className="text-muted">Récupération des annonces en cours</p>
           </div>
         </div>
       </div>
@@ -564,10 +570,10 @@ const PublicAdList: React.FC = () => {
           >
             <div className="toast-body d-flex align-items-center">
               <i className={`bi ${
-                notification.type === 'success' ? 'bi-check-circle' :
-                notification.type === 'error' ? 'bi-exclamation-circle' :
-                notification.type === 'warning' ? 'bi-exclamation-triangle' :
-                'bi-info-circle'
+                notification.type === 'success' ? 'bi-check-circle-fill' :
+                notification.type === 'error' ? 'bi-exclamation-circle-fill' :
+                notification.type === 'warning' ? 'bi-exclamation-triangle-fill' :
+                'bi-info-circle-fill'
               } me-3 fs-5`}></i>
               <div className="flex-grow-1">
                 <div className="fw-medium" style={{whiteSpace: 'pre-line'}}>
@@ -588,10 +594,11 @@ const PublicAdList: React.FC = () => {
         <div className="container">
           <div className="text-center">
             <h1 className="display-5 fw-bold mb-3">
-              Marketplace Crypto P2P Maroc
+              <i className="bi bi-shop me-2"></i>
+              Marketplace Crypto P2P
             </h1>
             <p className="lead mb-4">
-              Achetez et vendez des cryptomonnaies en MAD avec des particuliers de confiance
+              Échangez des cryptomonnaies en MAD avec la communauté marocaine
             </p>
             
             <div className="row justify-content-center mb-4">
@@ -606,7 +613,7 @@ const PublicAdList: React.FC = () => {
                   <div className="h2 fw-bold text-success">
                     {ads.filter(a => a.type === 'buy').length}
                   </div>
-                  <div className="text-white text-opacity-75">Achats</div>
+                  <div className="text-white text-opacity-75">Demandes d'achat</div>
                 </div>
               </div>
               <div className="col-md-3 col-sm-6 mb-3">
@@ -614,15 +621,15 @@ const PublicAdList: React.FC = () => {
                   <div className="h2 fw-bold text-danger">
                     {ads.filter(a => a.type === 'sell').length}
                   </div>
-                  <div className="text-white text-opacity-75">Ventes</div>
+                  <div className="text-white text-opacity-75">Offres de vente</div>
                 </div>
               </div>
               <div className="col-md-3 col-sm-6 mb-3">
                 <div className="bg-white bg-opacity-10 rounded p-3">
                   <div className="h2 fw-bold text-info">
-                    {Math.floor(ads.reduce((total, ad) => total + calculateTotal(ad), 0) / 1000)}K
+                    {ads.filter(a => a.user?.isVerified).length}
                   </div>
-                  <div className="text-white text-opacity-75">MAD disponibles</div>
+                  <div className="text-white text-opacity-75">Utilisateurs vérifiés</div>
                 </div>
               </div>
             </div>
@@ -633,7 +640,7 @@ const PublicAdList: React.FC = () => {
                   to="/register" 
                   className="btn btn-warning btn-lg fw-bold px-5"
                 >
-                  <i className="bi bi-rocket me-2"></i>
+                  <i className="bi bi-person-plus me-2"></i>
                   S'inscrire Gratuitement
                 </Link>
                 <Link 
@@ -654,21 +661,21 @@ const PublicAdList: React.FC = () => {
         <div className="card shadow-lg mb-5">
           <div className="card-body p-4">
             <h2 className="card-title h4 fw-bold text-dark mb-4">
-              <i className="bi bi-filter me-2"></i>
+              <i className="bi bi-funnel me-2"></i>
               Trouvez l'offre parfaite
             </h2>
             
             <div className="row g-3">
               <div className="col-md-6 col-lg-4">
-                <label className="form-label fw-medium">Rechercher</label>
+                <label className="form-label fw-medium">
+                  <i className="bi bi-search me-1"></i>
+                  Rechercher
+                </label>
                 <div className="input-group">
-                  <span className="input-group-text">
-                    <i className="bi bi-search"></i>
-                  </span>
                   <input
                     type="text"
                     className="form-control"
-                    placeholder="Crypto, banque, vendeur..."
+                    placeholder="Crypto, vendeur, méthode de paiement..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                   />
@@ -684,7 +691,10 @@ const PublicAdList: React.FC = () => {
               </div>
               
               <div className="col-md-6 col-lg-2">
-                <label className="form-label fw-medium">Type</label>
+                <label className="form-label fw-medium">
+                  <i className="bi bi-arrow-left-right me-1"></i>
+                  Type
+                </label>
                 <select
                   className="form-select"
                   value={typeFilter}
@@ -697,7 +707,10 @@ const PublicAdList: React.FC = () => {
               </div>
               
               <div className="col-md-6 col-lg-2">
-                <label className="form-label fw-medium">Devise</label>
+                <label className="form-label fw-medium">
+                  <i className="bi bi-currency-exchange me-1"></i>
+                  Devise
+                </label>
                 <select
                   className="form-select"
                   value={currencyFilter}
@@ -711,7 +724,10 @@ const PublicAdList: React.FC = () => {
               </div>
               
               <div className="col-md-6 col-lg-2">
-                <label className="form-label fw-medium">Trier par</label>
+                <label className="form-label fw-medium">
+                  <i className="bi bi-sort-down me-1"></i>
+                  Trier par
+                </label>
                 <div className="input-group">
                   <select
                     className="form-select"
@@ -734,7 +750,10 @@ const PublicAdList: React.FC = () => {
               </div>
               
               <div className="col-md-6 col-lg-2">
-                <label className="form-label fw-medium">Actions</label>
+                <label className="form-label fw-medium">
+                  <i className="bi bi-arrow-clockwise me-1"></i>
+                  Actions
+                </label>
                 <button 
                   className="btn btn-outline-primary w-100"
                   onClick={loadAds}
@@ -757,9 +776,9 @@ const PublicAdList: React.FC = () => {
                     </span>
                   )}
                 </div>
-                <div className="text-muted">
+                <div className="text-muted small">
                   <i className="bi bi-info-circle me-1"></i>
-                  Valable 72 heures
+                  Transactions sécurisées avec chat intégré
                 </div>
               </div>
             </div>
@@ -822,8 +841,6 @@ const PublicAdList: React.FC = () => {
               const isSellAd = ad.type === 'sell';
               const statusBadge = getStatusBadge(ad.status);
               const isTransactionActive = activeTransactions.has(ad.id);
-              const timeRemaining = getTimeRemaining(ad.createdAt, ad.timeLimitMinutes);
-              const isExpired = isAdExpired(ad.createdAt, ad.timeLimitMinutes);
               
               return (
                 <div key={ad.id} className="col-12 col-md-6 col-lg-4">
@@ -834,7 +851,8 @@ const PublicAdList: React.FC = () => {
                         <div>
                           <div className="d-flex flex-wrap gap-2 mb-2">
                             <span className={`badge ${ad.type === 'buy' ? 'bg-success' : 'bg-danger'}`}>
-                              {ad.type === 'buy' ? '🛒 ACHAT' : '💰 VENTE'}
+                              <i className={`bi ${ad.type === 'buy' ? 'bi-arrow-down-circle' : 'bi-arrow-up-circle'} me-1`}></i>
+                              {ad.type === 'buy' ? 'ACHAT' : 'VENTE'}
                             </span>
                             <span className={`badge ${statusBadge.class}`}>
                               <i className={`bi ${statusBadge.icon} me-1`}></i>
@@ -842,8 +860,8 @@ const PublicAdList: React.FC = () => {
                             </span>
                           </div>
                           <div className="small text-muted">
-                            <i className="bi bi-clock me-1"></i>
-                            {formatDate(ad.createdAt)}
+                            <i className="bi bi-calendar me-1"></i>
+                            Publiée {formatDate(ad.createdAt)}
                           </div>
                         </div>
                         <div className="text-end">
@@ -856,12 +874,13 @@ const PublicAdList: React.FC = () => {
                       
                       {/* Titre */}
                       <h5 className="card-title fw-bold text-dark mb-3">
+                        <i className={`bi ${isSellAd ? 'bi-cash' : 'bi-cart'} me-2`}></i>
                         {ad.type === 'buy' ? 'Achat de' : 'Vente de'} {ad.amount} {ad.currency?.code}
                       </h5>
                       
                       {/* Méthode de paiement */}
                       <div className="d-flex align-items-center text-dark mb-3">
-                        <i className="bi bi-bank text-muted me-2"></i>
+                        <i className="bi bi-credit-card text-muted me-2"></i>
                         <span className="fw-medium">{ad.paymentMethod}</span>
                       </div>
                       
@@ -894,12 +913,6 @@ const PublicAdList: React.FC = () => {
                             {ad.maxAmountPerTransaction ? ` Max: ${ad.maxAmountPerTransaction}` : 'Sans max'}
                           </div>
                         )}
-                        
-                        {/* Temps restant */}
-                        <div className={`small mt-2 ${isExpired ? 'text-danger' : 'text-success'}`}>
-                          <i className="bi bi-clock-history me-1"></i>
-                          {timeRemaining}
-                        </div>
                       </div>
                       
                       {/* Vendeur/Acheteur */}
@@ -910,20 +923,26 @@ const PublicAdList: React.FC = () => {
                               {ad.type === 'buy' ? 'Acheteur' : 'Vendeur'}
                             </div>
                             <div className="d-flex align-items-center">
-                              <div className="bg-primary bg-opacity-10 rounded-circle p-2 me-2">
-                                <i className="bi bi-person text-primary"></i>
+                              <div className={`rounded-circle p-2 me-2 ${ad.user?.isVerified ? 'bg-success bg-opacity-10' : 'bg-primary bg-opacity-10'}`}>
+                                <i className={`bi bi-person ${ad.user?.isVerified ? 'text-success' : 'text-primary'}`}></i>
                               </div>
                               <div>
                                 <div className="fw-semibold text-dark">
                                   {ad.user?.fullName || 'Anonyme'}
+                                  {ad.user?.isVerified && (
+                                    <i className="bi bi-patch-check-fill text-success ms-1" title="Utilisateur vérifié"></i>
+                                  )}
                                 </div>
-                                <div className="d-flex align-items-center text-warning small">
-                                  <i className="bi bi-star-fill me-1"></i>
-                                  {ad.user?.reputation?.toFixed(1) || '5.0'}
-                                  <span className="badge bg-success bg-opacity-25 text-success ms-2">
-                                    <i className="bi bi-check-circle me-1"></i>
-                                    Vérifié
-                                  </span>
+                                <div className="d-flex align-items-center">
+                                  <div className="text-warning small">
+                                    <i className="bi bi-star-fill me-1"></i>
+                                    {ad.user?.reputation?.toFixed(1) || '5.0'}
+                                  </div>
+                                  {ad.user?.username && (
+                                    <span className="text-muted small ms-2">
+                                      @{ad.user.username}
+                                    </span>
+                                  )}
                                 </div>
                               </div>
                             </div>
@@ -939,63 +958,35 @@ const PublicAdList: React.FC = () => {
                         <div className="mt-4">
                           {isAuthenticated ? (
                             <>
-                              {/* Bouton principal Acheter/Vendre */}
+                              {/* Bouton principal Transaction */}
                               <div className="mb-3">
-                                {isSellAd ? (
-                                  <button 
-                                    className={`btn w-100 ${isUserAd ? 'btn-secondary' : 'btn-success'}`}
-                                    onClick={() => handleBuyAd(ad)}
-                                    disabled={!!(isTransactionActive || isUserAd || isExpired)}
-                                    title={isUserAd ? 'Votre annonce' : isExpired ? 'Annonce expirée' : `Acheter ${ad.amount} ${ad.currency.code}`}
-                                  >
-                                    {isTransactionActive ? (
-                                      <>
-                                        <span className="spinner-border spinner-border-sm me-2"></span>
-                                        Création transaction...
-                                      </>
-                                    ) : isUserAd ? (
-                                      'Votre annonce'
-                                    ) : isExpired ? (
-                                      'Expiré'
-                                    ) : (
-                                      <>
-                                        <i className="bi bi-cart me-2"></i>
-                                        Acheter maintenant
-                                        <br />
-                                        <small className="small">
-                                          Total: {calculateTotal(ad).toLocaleString('fr-MA')} MAD
-                                        </small>
-                                      </>
-                                    )}
-                                  </button>
-                                ) : (
-                                  <button 
-                                    className={`btn w-100 ${isUserAd ? 'btn-secondary' : 'btn-warning'}`}
-                                    onClick={() => handleBuyAd(ad)}
-                                    disabled={!!(isTransactionActive || isUserAd || isExpired)}
-                                    title={isUserAd ? 'Votre annonce' : isExpired ? 'Annonce expirée' : `Vendre ${ad.amount} ${ad.currency.code}`}
-                                  >
-                                    {isTransactionActive ? (
-                                      <>
-                                        <span className="spinner-border spinner-border-sm me-2"></span>
-                                        Création transaction...
-                                      </>
-                                    ) : isUserAd ? (
-                                      'Votre annonce'
-                                    ) : isExpired ? (
-                                      'Expiré'
-                                    ) : (
-                                      <>
-                                        <i className="bi bi-currency-dollar me-2"></i>
-                                        Vendre à cet acheteur
-                                        <br />
-                                        <small className="small">
-                                          Total: {calculateTotal(ad).toLocaleString('fr-MA')} MAD
-                                        </small>
-                                      </>
-                                    )}
-                                  </button>
-                                )}
+                                <button 
+                                  className={`btn w-100 ${isUserAd ? 'btn-secondary' : 'btn-primary'}`}
+                                  onClick={() => handleCreateTransaction(ad)}
+                                  disabled={!!(isTransactionActive || isUserAd)}
+                                  title={isUserAd ? 'Votre annonce' : `Démarrer une transaction pour ${ad.amount} ${ad.currency.code}`}
+                                >
+                                  {isTransactionActive ? (
+                                    <>
+                                      <span className="spinner-border spinner-border-sm me-2"></span>
+                                      Création transaction...
+                                    </>
+                                  ) : isUserAd ? (
+                                    <>
+                                      <i className="bi bi-person me-2"></i>
+                                      Votre annonce
+                                    </>
+                                  ) : (
+                                    <>
+                                      <i className="bi bi-arrow-left-right me-2"></i>
+                                      Démarrer une transaction
+                                      <br />
+                                      <small className="small">
+                                        Total: {calculateTotal(ad).toLocaleString('fr-MA')} MAD
+                                      </small>
+                                    </>
+                                  )}
+                                </button>
                               </div>
                               
                               {/* Boutons de contact */}
@@ -1006,36 +997,24 @@ const PublicAdList: React.FC = () => {
                                     className="btn btn-success w-100"
                                     onClick={() => handleWhatsAppContact(ad)}
                                     disabled={!ad.user?.phone}
-                                    title={ad.user?.phone ? `Contacter sur WhatsApp` : 'Numéro non disponible'}
+                                    title={ad.user?.phone ? `Contacter ${ad.user.fullName} sur WhatsApp` : 'Numéro non disponible'}
                                   >
                                     <i className="bi bi-whatsapp me-2"></i>
                                     WhatsApp
                                   </button>
                                 </div>
                                 
-                                {/* Message privé */}
+                                {/* Message privé avec création transaction */}
                                 <div className="col">
                                   <button 
-                                    className="btn btn-primary w-100"
+                                    className="btn btn-info w-100"
                                     onClick={() => handlePrivateMessage(ad)}
+                                    title={`Envoyer un message à ${ad.user.fullName}`}
                                   >
-                                    <i className="bi bi-chat me-2"></i>
+                                    <i className="bi bi-chat-left-text me-2"></i>
                                     Message
                                   </button>
                                 </div>
-                              </div>
-                              
-                              {/* Options supplémentaires */}
-                              <div className="mt-2 text-center">
-                                <button 
-                                  className="btn btn-link text-decoration-none"
-                                  onClick={() => navigate('/dashboard/ads/create', {
-                                    state: { prefill: ad }
-                                  })}
-                                >
-                                  <i className="bi bi-copy me-1"></i>
-                                  Créer une annonce similaire
-                                </button>
                               </div>
                             </>
                           ) : (
@@ -1067,13 +1046,13 @@ const PublicAdList: React.FC = () => {
                                 </div>
                                 <div className="col">
                                   <button 
-                                    className="btn btn-outline-primary w-100"
+                                    className="btn btn-outline-info w-100"
                                     onClick={() => {
                                       showNotification('info', 'Inscrivez-vous pour envoyer des messages !');
                                       navigate('/register', { state: { from: '/market' } });
                                     }}
                                   >
-                                    <i className="bi bi-chat me-2"></i>
+                                    <i className="bi bi-chat-left-text me-2"></i>
                                     Message
                                   </button>
                                 </div>
@@ -1106,7 +1085,7 @@ const PublicAdList: React.FC = () => {
                   to="/register" 
                   className="btn btn-light text-primary fw-bold px-4 py-3"
                 >
-                  <i className="bi bi-rocket me-2"></i>
+                  <i className="bi bi-person-plus me-2"></i>
                   Créer un compte gratuit
                 </Link>
                 <Link 
@@ -1136,15 +1115,21 @@ const PublicAdList: React.FC = () => {
         
         .card {
           border: 1px solid rgba(0,0,0,.125);
+          border-radius: 12px;
         }
         
         .card:hover {
           border-color: #0d6efd;
         }
         
+        .whatsapp-btn {
+          background-color: #25D366;
+          border-color: #25D366;
+        }
+        
         .whatsapp-btn:hover {
-          background-color: #25D366 !important;
-          border-color: #25D366 !important;
+          background-color: #1da851;
+          border-color: #1da851;
         }
       `}</style>
     </div>
