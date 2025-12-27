@@ -1,28 +1,25 @@
-// src/components/MessagesPage.tsx - VERSION CORRIGÉE SANS ERREURS
+// src/components/MessagesPage.tsx - VERSION CORRIGÉE ET OPTIMISÉE
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useLocation, useNavigate } from 'react-router-dom';
-// ⚠️ SUPPRIMEZ CET IMPORT INUTILE :
-// import api from '../api/axiosConfig'; // ❌ PLUS BESOIN
-// ✅ IMPORT SEULEMENT DU SERVICE
 import TransactionService from '../api/TransactionService';
 
 // ============================================
-// INTERFACES CORRIGÉES
+// INTERFACES
 // ============================================
 
 interface User {
   id: number;
   fullName: string;
   email: string;
-  avatar?: string; // ✅ AJOUTEZ CETTE LIGNE POUR CORRIGER L'ERREUR
+  avatar?: string;
 }
 
 interface Transaction {
   id: number;
   usdtAmount: number;
   fiatAmount: number;
-  status: 'pending' | 'completed' | 'cancelled' | 'disputed';
+  status: 'pending' | 'completed' | 'cancelled' | 'disputed' | 'paid' | 'released';
   buyer: User;
   seller: User;
   ad: {
@@ -74,22 +71,18 @@ const MessagesPage: React.FC = () => {
   // ============================================
 
   useEffect(() => {
-    // Vérifier l'authentification
     if (!isAuthenticated) {
       navigate('/login', { state: { from: '/dashboard/messages' } });
       return;
     }
 
-    // Récupérer l'ID de transaction depuis la navigation
     const state = location.state as any;
     if (state?.transactionId) {
       setSelectedTransaction(state.transactionId);
     }
 
-    // Charger les transactions
     loadTransactions();
 
-    // Auto-refresh toutes les 30 secondes
     const refreshInterval = setInterval(() => {
       if (autoRefresh && user) {
         refreshData();
@@ -99,7 +92,6 @@ const MessagesPage: React.FC = () => {
     return () => clearInterval(refreshInterval);
   }, [user, isAuthenticated, navigate, location, autoRefresh]);
 
-  // Charger les messages quand la transaction change
   useEffect(() => {
     if (selectedTransaction) {
       loadMessages(selectedTransaction);
@@ -108,7 +100,6 @@ const MessagesPage: React.FC = () => {
     }
   }, [selectedTransaction]);
 
-  // Scroll automatique vers le bas
   useEffect(() => {
     if (messages.length > 0 && messagesContainerRef.current) {
       setTimeout(() => {
@@ -130,14 +121,11 @@ const MessagesPage: React.FC = () => {
       
       console.log('📥 Chargement des transactions pour utilisateur:', user.id);
       
-      // ✅ UTILISATION DU SERVICE SEULEMENT
       const transactionsData = await TransactionService.getUserTransactions(user.id);
       
       console.log(`📊 ${transactionsData.length} transactions chargées`);
       
-      // Transformer les données
       const formattedTransactions: Transaction[] = transactionsData.map((tx: any) => {
-        // Fonction pour extraire l'utilisateur
         const extractUser = (userData: any, defaultName: string): User => {
           if (!userData) {
             return { id: 0, fullName: defaultName, email: '' };
@@ -148,11 +136,10 @@ const MessagesPage: React.FC = () => {
               id: userData.id || 0,
               fullName: userData.fullName || userData.full_name || userData.name || defaultName,
               email: userData.email || '',
-              avatar: userData.avatar // ✅ CORRIGÉ : propriété optionnelle
+              avatar: userData.avatar
             };
           }
           
-          // Si c'est une string IRI
           if (typeof userData === 'string') {
             const idMatch = userData.match(/\/(\d+)$/);
             return {
@@ -186,7 +173,6 @@ const MessagesPage: React.FC = () => {
 
       setTransactions(formattedTransactions);
 
-      // Si pas de transaction sélectionnée et qu'il y a des transactions
       if (!selectedTransaction && formattedTransactions.length > 0) {
         setSelectedTransaction(formattedTransactions[0].id);
       }
@@ -208,12 +194,10 @@ const MessagesPage: React.FC = () => {
       
       console.log(`📨 Chargement messages transaction ${transactionId}`);
       
-      // ✅ UTILISATION DU SERVICE SEULEMENT
       const messagesData = await TransactionService.getTransactionMessages(transactionId);
       
       console.log(`💬 ${messagesData.length} messages chargés`);
       
-      // Transformer les données
       const formattedMessages: Message[] = messagesData.map((msg: any) => {
         const extractUser = (userData: any): User => {
           if (!userData) {
@@ -225,7 +209,7 @@ const MessagesPage: React.FC = () => {
               id: userData.id || 0,
               fullName: userData.fullName || userData.full_name || userData.name || 'Expéditeur',
               email: userData.email || '',
-              avatar: userData.avatar // ✅ CORRIGÉ : propriété optionnelle
+              avatar: userData.avatar
             };
           }
           
@@ -242,7 +226,6 @@ const MessagesPage: React.FC = () => {
         };
       });
 
-      // Trier par date
       formattedMessages.sort((a, b) => 
         new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
       );
@@ -263,28 +246,24 @@ const MessagesPage: React.FC = () => {
     try {
       setSending(true);
       
-      // Message temporaire pour feedback immédiat
       const tempMessage: Message = {
-        id: Date.now(), // ID temporaire
+        id: Date.now(),
         sender: {
           id: user.id,
           fullName: user.fullName || 'Vous',
           email: user.email || '',
-          //avatar: user.avatar // ✅ CORRIGÉ : propriété optionnelle
+          //avatar: user.avatar
         },
         message: newMessage.trim(),
         createdAt: new Date().toISOString(),
         transaction: { id: selectedTransaction }
       };
 
-      // Ajouter le message temporaire
       setMessages(prev => [...prev, tempMessage]);
       setNewMessage('');
 
-      // ✅ ENVOI RÉEL DU MESSAGE
       await TransactionService.sendMessage(selectedTransaction, user.id, newMessage.trim());
       
-      // Recharger les messages pour avoir les vraies données
       setTimeout(() => {
         loadMessages(selectedTransaction);
       }, 500);
@@ -292,7 +271,6 @@ const MessagesPage: React.FC = () => {
     } catch (error: any) {
       console.error('❌ Erreur envoi message:', error);
       
-      // Retirer le message temporaire en cas d'erreur
       setMessages(prev => prev.filter(msg => msg.id !== Date.now()));
       
       alert('Erreur lors de l\'envoi du message. Veuillez réessayer.');
@@ -352,6 +330,8 @@ const MessagesPage: React.FC = () => {
     switch (status) {
       case 'completed': return { class: 'bg-success', text: 'Terminé' };
       case 'pending': return { class: 'bg-warning text-dark', text: 'En attente' };
+      case 'paid': return { class: 'bg-info', text: 'Payé' };
+      case 'released': return { class: 'bg-primary', text: 'Libéré' };
       case 'cancelled': return { class: 'bg-danger', text: 'Annulé' };
       case 'disputed': return { class: 'bg-secondary', text: 'En litige' };
       default: return { class: 'bg-info', text: status };
@@ -474,7 +454,7 @@ const MessagesPage: React.FC = () => {
                     return (
                       <button
                         key={tx.id}
-                        className={`list-group-item list-group-item-action border-0 py-3 ${isActive ? 'active' : ''}`}
+                        className={`list-group-item list-group-item-action border-0 py-3 ${isActive ? 'bg-light' : ''}`}
                         onClick={() => setSelectedTransaction(tx.id)}
                       >
                         <div className="d-flex align-items-center">
@@ -550,7 +530,7 @@ const MessagesPage: React.FC = () => {
                   </div>
                   <div className="d-flex gap-2 align-items-center">
                     <span className={`badge ${getTransactionStatusBadge(selectedTx.status).class}`}>
-                      {selectedTx.status}
+                      {getTransactionStatusBadge(selectedTx.status).text}
                     </span>
                     <button 
                       className="btn btn-sm btn-outline-secondary"

@@ -1,8 +1,13 @@
-// src/components/PublicAdList.tsx - VERSION CORRIGÉE ET OPTIMISÉE
+// src/components/PublicAdList.tsx - VERSION COMPLÈTE OPTIMISÉE ET CORRIGÉE
 import React, { useEffect, useState, useCallback } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../api/axiosConfig';
+import TransactionService from '../api/TransactionService';
+
+// ============================================
+// INTERFACES
+// ============================================
 
 interface User {
   id: number;
@@ -39,69 +44,9 @@ interface Notification {
   id: number;
 }
 
-// 🔧 SERVICE DE TRANSACTION SIMPLIFIÉ
-class TransactionService {
-  static async createTransaction(ad: Ad, userId: number) {
-    const totalAmount = ad.amount * ad.price;
-    
-    // ✅ FORMAT CORRECT - Sans /api dans les URLs
-    const transactionData = {
-      ad: `/ads/${ad.id}`,
-      buyer: ad.type === 'sell' ? `/users/${userId}` : `/users/${ad.user.id}`,
-      seller: ad.type === 'sell' ? `/users/${ad.user.id}` : `/users/${userId}`,
-      usdtAmount: ad.amount,
-      fiatAmount: totalAmount,
-      status: 'pending',
-      paymentReference: `TRX-${Date.now()}-${ad.id}`,
-      expiresAt: new Date(Date.now() + 30 * 60000).toISOString()
-    };
-
-    console.log('📦 Transaction payload:', transactionData);
-
-    // Essayer SANS /api d'abord (axios ajoute déjà /api)
-    const endpoints = ['/transactions', '/api/transactions'];
-    
-    for (const endpoint of endpoints) {
-      try {
-        console.log(`🔄 POST vers: ${endpoint}`);
-        const response = await api.post(endpoint, transactionData);
-        console.log(`✅ Transaction créée via ${endpoint}`);
-        return response.data;
-      } catch (err: any) {
-        console.log(`❌ Échec avec ${endpoint}:`, err.response?.status);
-        continue;
-      }
-    }
-    
-    throw new Error('Impossible de créer la transaction');
-  }
-
-  static async sendMessage(transactionId: number, userId: number, recipientId: number, ad: Ad) {
-    const messageData = {
-      transaction: `/transactions/${transactionId}`,
-      sender: `/users/${userId}`,
-      message: `Bonjour ! Je suis intéressé par votre annonce #${ad.id}.\n\n` +
-              `Détails: ${ad.type === 'sell' ? 'Achat' : 'Vente'} de ${ad.amount} ${ad.currency.code}\n` +
-              `Prix: ${ad.price} MAD/${ad.currency.code}\n` +
-              `Total: ${ad.amount * ad.price} MAD`
-    };
-
-    const endpoints = ['/chat_messages', '/api/chat_messages'];
-    
-    for (const endpoint of endpoints) {
-      try {
-        await api.post(endpoint, messageData);
-        console.log(`✅ Message envoyé via ${endpoint}`);
-        return true;
-      } catch (err: any) {
-        console.log(`❌ Échec message ${endpoint}:`, err.response?.status);
-        continue;
-      }
-    }
-    
-    throw new Error('Impossible d\'envoyer le message');
-  }
-}
+// ============================================
+// COMPOSANT PRINCIPAL
+// ============================================
 
 const PublicAdList: React.FC = () => {
   const [ads, setAds] = useState<Ad[]>([]);
@@ -114,7 +59,7 @@ const PublicAdList: React.FC = () => {
   const { isAuthenticated, user } = useAuth();
   const navigate = useNavigate();
 
-  // 🔔 SYSTEME DE NOTIFICATIONS
+  // 🔔 SYSTÈME DE NOTIFICATIONS
   const showNotification = useCallback((type: Notification['type'], message: string) => {
     const id = Date.now();
     setNotifications(prev => [...prev, { type, message, id }]);
@@ -124,64 +69,102 @@ const PublicAdList: React.FC = () => {
     }, 5000);
   }, []);
 
-  // 📥 CHARGEMENT DES ANNONCES - SIMPLIFIÉ
+  // 📥 CHARGEMENT DES ANNONCES
   const loadAds = useCallback(async () => {
     try {
       setLoading(true);
       
       console.log('🌐 Chargement des annonces...');
       
-      // ✅ ENDPOINT CORRECT - axios ajoute /api automatiquement
-      const response = await api.get('/ads', {
-        params: {
-          page: 1,
-          itemsPerPage: 100,
-          'order[createdAt]': 'desc',
-          status: 'active'
-        }
-      });
+      // Essayer avec /api/ads d'abord (ApiPlatform)
+      let response;
+      try {
+        response = await api.get('/api/ads', {
+          params: {
+            page: 1,
+            itemsPerPage: 100,
+            'order[createdAt]': 'desc',
+            status: 'active'
+          }
+        });
+        console.log('✅ API Platform format détecté');
+      } catch (apiError: any) {
+        // Si /api/ads échoue, essayer /ads (API REST standard)
+        console.log('⚠️ /api/ads échoué, essai avec /ads');
+        response = await api.get('/ads', {
+          params: {
+            page: 1,
+            itemsPerPage: 100,
+            orderBy: 'createdAt',
+            orderDirection: 'desc',
+            status: 'active'
+          }
+        });
+      }
 
       let adsData: any[] = [];
       
-      // Gestion des différents formats de réponse API Platform
+      // Gestion des différents formats de réponse
       if (response.data['hydra:member']) {
+        // Format ApiPlatform (hydra)
         adsData = response.data['hydra:member'];
+      } else if (response.data.items) {
+        // Format avec pagination
+        adsData = response.data.items;
       } else if (Array.isArray(response.data)) {
+        // Format tableau simple
         adsData = response.data;
       }
       
       console.log(`📊 ${adsData.length} annonces récupérées`);
 
-      // Transformation simple des données
+      // Transformation des données
       const formattedAds: Ad[] = adsData.map((item: any) => ({
-        id: item.id,
-        type: item.type || 'buy',
+        id: item.id || 0,
+        type: (item.type || 'buy') as 'buy' | 'sell',
         amount: parseFloat(item.amount) || 0,
         price: parseFloat(item.price) || 0,
         currency: {
-          code: item.currency?.code || 'USDT',
-          name: item.currency?.name || 'Tether USD',
+          code: item.currency?.code || item.currencyCode || 'USDT',
+          name: item.currency?.name || item.currencyName || 'Tether USD',
           type: item.currency?.type || 'crypto'
         },
-        status: item.status || 'active',
-        paymentMethod: item.paymentMethod || item.payment_method || 'Non spécifié',
+        status: (item.status || 'active') as 'active' | 'paused' | 'completed' | 'cancelled',
+        paymentMethod: item.paymentMethod || item.payment_method || item.paymentMethodName || 'Non spécifié',
         user: {
-          id: item.user?.id || 0,
-          fullName: item.user?.fullName || item.user?.full_name || 'Utilisateur',
-          reputation: item.user?.reputation || 5.0,
-          phone: item.user?.phone,
-          isVerified: item.user?.isVerified
+          id: item.user?.id || item.sellerId || item.userId || 0,
+          fullName: item.user?.fullName || item.user?.full_name || item.user?.name || item.sellerName || 'Utilisateur',
+          reputation: parseFloat(item.user?.reputation) || 5.0,
+          phone: item.user?.phone || item.user?.phoneNumber,
+          isVerified: item.user?.isVerified || item.user?.verified
         },
-        createdAt: item.createdAt || item.created_at,
-        terms: item.terms,
-        minAmountPerTransaction: item.minAmountPerTransaction,
-        maxAmountPerTransaction: item.maxAmountPerTransaction
+        createdAt: item.createdAt || item.created_at || new Date().toISOString(),
+        terms: item.terms || item.description,
+        minAmountPerTransaction: item.minAmountPerTransaction || item.min_amount,
+        maxAmountPerTransaction: item.maxAmountPerTransaction || item.max_amount
       }));
 
-      setAds(formattedAds);
+      // Filtrer les annonces invalides
+      const validAds = formattedAds.filter(ad => 
+        ad.id > 0 && 
+        ad.user.id > 0 && 
+        ad.amount > 0 && 
+        ad.price > 0
+      );
+
+      setAds(validAds);
+      
+      if (validAds.length !== formattedAds.length) {
+        console.warn(`⚠️ ${formattedAds.length - validAds.length} annonces invalides filtrées`);
+      }
       
     } catch (error: any) {
-      console.error('❌ Erreur chargement annonces:', error);
+      console.error('❌ Erreur chargement annonces:', {
+        message: error.message,
+        status: error.response?.status,
+        data: error.response?.data
+      });
+      
       showNotification('error', 'Impossible de charger les annonces');
       setAds([]);
     } finally {
@@ -191,9 +174,16 @@ const PublicAdList: React.FC = () => {
 
   useEffect(() => {
     loadAds();
+    
+    // Auto-refresh toutes les 2 minutes
+    const interval = setInterval(() => {
+      loadAds();
+    }, 120000);
+    
+    return () => clearInterval(interval);
   }, [loadAds]);
 
-  // 💰 CRÉATION DE TRANSACTION - OPTIMISÉE
+  // 💰 CRÉATION DE TRANSACTION
   const handleCreateTransaction = async (ad: Ad) => {
     if (!isAuthenticated || !user) {
       showNotification('warning', 'Connectez-vous pour créer une transaction');
@@ -212,13 +202,25 @@ const PublicAdList: React.FC = () => {
       setProcessingTransaction(ad.id);
       showNotification('info', 'Création de la transaction en cours...');
 
-      // ✅ UTILISATION DU SERVICE CORRIGÉ
+      // ✅ CRÉATION DE LA TRANSACTION
       const transaction = await TransactionService.createTransaction(ad, user.id);
       
-      showNotification('success', 'Transaction créée ! Redirection vers le chat...');
+      showNotification('success', 'Transaction créée avec succès !');
 
-      // ✅ ENVOI DU MESSAGE INITIAL
-      await TransactionService.sendMessage(transaction.id, user.id, ad.user.id, ad);
+      // ✅ ENVOI DU MESSAGE INITIAL (sans bloquer en cas d'erreur)
+     try {
+  // Créer et envoyer le message manuellement
+  const messageText = `Bonjour ! Je suis intéressé par votre annonce #${ad.id}.\n\n` +
+    `Détails: ${ad.type === 'sell' ? 'Achat' : 'Vente'} de ${ad.amount} ${ad.currency.code}\n` +
+    `Prix: ${ad.price} MAD/${ad.currency.code}\n` +
+    `Total: ${ad.amount * ad.price} MAD`;
+  
+  await TransactionService.sendMessage(transaction.id, user.id, messageText);
+  console.log('✅ Message initial envoyé');
+} catch (messageError: any) {
+  console.warn('⚠️ Message initial non envoyé:', messageError.message || messageError);
+  showNotification('info', 'Transaction créée, mais message initial non envoyé');
+}
 
       // Redirection vers la messagerie
       setTimeout(() => {
@@ -226,18 +228,30 @@ const PublicAdList: React.FC = () => {
           state: {
             transactionId: transaction.id,
             recipientId: ad.user.id,
-            recipientName: ad.user.fullName
+            recipientName: ad.user.fullName,
+            autoSelect: true
           }
         });
-      }, 1500);
+      }, 1000);
 
     } catch (error: any) {
-      console.error('❌ Erreur création transaction:', error);
+      console.error('❌ Erreur création transaction:', {
+        message: error.message,
+        response: error.response?.data
+      });
       
       let errorMsg = 'Erreur lors de la création de la transaction';
-      if (error.response?.status === 400) errorMsg = 'Données invalides';
-      if (error.response?.status === 401) errorMsg = 'Session expirée';
-      if (error.response?.status === 404) errorMsg = 'Endpoint non trouvé';
+      
+      if (error.message.includes('400')) {
+        errorMsg = 'Données invalides pour la transaction';
+      } else if (error.message.includes('401')) {
+        errorMsg = 'Session expirée, veuillez vous reconnecter';
+        navigate('/login');
+      } else if (error.message.includes('404')) {
+        errorMsg = 'Service temporairement indisponible';
+      } else if (error.message.includes('409')) {
+        errorMsg = 'Transaction déjà en cours pour cette annonce';
+      }
       
       showNotification('error', errorMsg);
       
@@ -253,51 +267,97 @@ const PublicAdList: React.FC = () => {
       return;
     }
 
+    // Nettoyer le numéro
     const phone = ad.user.phone.replace(/\D/g, '');
+    
+    // Vérifier format international
+    let internationalPhone = phone;
+    if (phone.startsWith('0')) {
+      internationalPhone = '212' + phone.substring(1);
+    } else if (!phone.startsWith('212')) {
+      internationalPhone = '212' + phone;
+    }
+
     const message = encodeURIComponent(
       `Bonjour ${ad.user.fullName},\n\n` +
       `Je suis intéressé par votre annonce #${ad.id} sur CryptoMaroc P2P.\n` +
-      `Détails: ${ad.type === 'sell' ? 'Achat' : 'Vente'} de ${ad.amount} ${ad.currency.code}\n` +
-      `Prix: ${ad.price} MAD/${ad.currency.code}\n` +
-      `Total: ${ad.amount * ad.price} MAD\n\n` +
+      `• Type: ${ad.type === 'sell' ? 'Achat' : 'Vente'} de ${ad.amount} ${ad.currency.code}\n` +
+      `• Prix: ${ad.price} MAD/${ad.currency.code}\n` +
+      `• Total: ${(ad.amount * ad.price).toLocaleString('fr-MA')} MAD\n` +
+      `• Méthode: ${ad.paymentMethod}\n\n` +
       `Pouvons-nous discuter de cette transaction ?`
     );
     
-    window.open(`https://wa.me/${phone}?text=${message}`, '_blank');
+    const whatsappUrl = `https://wa.me/${internationalPhone}?text=${message}`;
+    window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
   };
 
-  // 🔍 FILTRAGE SIMPLE
+  // 🔍 FILTRAGE ET RECHERCHE
   const filteredAds = ads.filter(ad => {
-    const matchesSearch = !searchTerm || 
-      ad.currency.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      ad.paymentMethod.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      ad.user.fullName.toLowerCase().includes(searchTerm.toLowerCase());
+    // Filtre par type
+    if (typeFilter !== 'all' && ad.type !== typeFilter) {
+      return false;
+    }
     
-    const matchesType = typeFilter === 'all' || ad.type === typeFilter;
+    // Filtre par recherche
+    if (searchTerm.trim()) {
+      const term = searchTerm.toLowerCase();
+      return (
+        ad.currency.code.toLowerCase().includes(term) ||
+        ad.currency.name.toLowerCase().includes(term) ||
+        ad.paymentMethod.toLowerCase().includes(term) ||
+        ad.user.fullName.toLowerCase().includes(term) ||
+        (ad.terms && ad.terms.toLowerCase().includes(term))
+      );
+    }
     
-    return matchesSearch && matchesType;
+    return true;
   });
 
   // 📊 FONCTIONS D'AFFICHAGE
-  const formatDate = (dateString: string) => {
+  const formatDate = (dateString: string): string => {
     try {
-      return new Date(dateString).toLocaleDateString('fr-MA', {
+      const date = new Date(dateString);
+      const now = new Date();
+      const diffMs = now.getTime() - date.getTime();
+      const diffMins = Math.floor(diffMs / 60000);
+      
+      if (diffMins < 1) return 'À l\'instant';
+      if (diffMins < 60) return `Il y a ${diffMins} min`;
+      if (diffMins < 1440) return `Il y a ${Math.floor(diffMins / 60)} h`;
+      
+      return date.toLocaleDateString('fr-MA', {
         day: '2-digit',
-        month: 'short'
+        month: 'short',
+        year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined
       });
     } catch {
       return '--/--';
     }
   };
 
-  const calculateTotal = (ad: Ad) => ad.amount * ad.price;
+  const calculateTotal = (ad: Ad): number => {
+    return ad.amount * ad.price;
+  };
 
-  if (loading) {
+  const getStatusColor = (status: string): string => {
+    switch (status) {
+      case 'active': return 'success';
+      case 'paused': return 'warning';
+      case 'completed': return 'secondary';
+      case 'cancelled': return 'danger';
+      default: return 'info';
+    }
+  };
+
+  // 🎨 RENDU DU CHARGEMENT
+  if (loading && ads.length === 0) {
     return (
       <div className="container py-5">
         <div className="text-center py-5">
           <div className="spinner-border text-primary mb-3" style={{width: '3rem', height: '3rem'}}></div>
-          <h4>Chargement du marketplace...</h4>
+          <h4 className="text-dark mb-2">Chargement du marketplace...</h4>
+          <p className="text-muted">Récupération des annonces en cours</p>
         </div>
       </div>
     );
@@ -308,14 +368,20 @@ const PublicAdList: React.FC = () => {
       {/* Notifications */}
       <div className="position-fixed top-0 end-0 p-3" style={{zIndex: 1050}}>
         {notifications.map(notif => (
-          <div key={notif.id} className={`toast show mb-2 bg-${notif.type} text-white`}>
-            <div className="toast-body">
+          <div key={notif.id} className={`toast show mb-2 border-0 shadow ${notif.type === 'success' ? 'bg-success' : notif.type === 'error' ? 'bg-danger' : notif.type === 'warning' ? 'bg-warning' : 'bg-info'}`}>
+            <div className="toast-body text-white d-flex align-items-center">
               <i className={`bi ${
-                notif.type === 'success' ? 'bi-check-circle' :
-                notif.type === 'error' ? 'bi-exclamation-triangle' :
-                'bi-info-circle'
-              } me-2`}></i>
-              {notif.message}
+                notif.type === 'success' ? 'bi-check-circle-fill' :
+                notif.type === 'error' ? 'bi-exclamation-triangle-fill' :
+                notif.type === 'warning' ? 'bi-exclamation-circle-fill' :
+                'bi-info-circle-fill'
+              } me-2 fs-5`}></i>
+              <div className="flex-grow-1">{notif.message}</div>
+              <button 
+                type="button" 
+                className="btn-close btn-close-white ms-2"
+                onClick={() => setNotifications(prev => prev.filter(n => n.id !== notif.id))}
+              ></button>
             </div>
           </div>
         ))}
@@ -323,58 +389,111 @@ const PublicAdList: React.FC = () => {
 
       {/* En-tête */}
       <div className="mb-4">
-        <h1 className="display-5 fw-bold">
-          <i className="bi bi-shop me-2"></i>
-          Marketplace P2P
-        </h1>
-        <p className="lead text-muted">
-          Échangez des cryptomonnaies en MAD avec la communauté marocaine
-        </p>
-      </div>
-
-      {/* Filtres */}
-      <div className="card shadow-sm mb-4">
-        <div className="card-body">
-          <div className="row g-3">
-            <div className="col-md-8">
-              <input
-                type="text"
-                className="form-control"
-                placeholder="Rechercher par crypto, méthode de paiement, vendeur..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            </div>
-            <div className="col-md-4">
-              <select
-                className="form-select"
-                value={typeFilter}
-                onChange={(e) => setTypeFilter(e.target.value as any)}
-              >
-                <option value="all">Tous les types</option>
-                <option value="buy">Achat</option>
-                <option value="sell">Vente</option>
-              </select>
-            </div>
+        <div className="d-flex justify-content-between align-items-start flex-wrap gap-3">
+          <div>
+            <h1 className="display-6 fw-bold text-dark">
+              <i className="bi bi-shop me-2 text-primary"></i>
+              Marketplace P2P
+            </h1>
+            <p className="lead text-muted mb-0">
+              Échangez des cryptomonnaies en MAD avec la communauté marocaine
+            </p>
           </div>
-          <div className="mt-3">
-            <span className="badge bg-primary fs-6">
-              {filteredAds.length} annonce{filteredAds.length !== 1 ? 's' : ''}
+          <div className="d-flex align-items-center">
+            <span className="badge bg-primary bg-opacity-10 text-primary fs-6 px-3 py-2">
+              <i className="bi bi-coin me-1"></i>
+              {ads.length} annonce{ads.length !== 1 ? 's' : ''} active{ads.length !== 1 ? 's' : ''}
             </span>
           </div>
+        </div>
+      </div>
+
+      {/* Filtres et recherche */}
+      <div className="card shadow-sm border-0 mb-4">
+        <div className="card-body p-4">
+          <div className="row g-3">
+            <div className="col-md-7 col-lg-8">
+              <div className="input-group">
+                <span className="input-group-text bg-light border-end-0">
+                  <i className="bi bi-search text-muted"></i>
+                </span>
+                <input
+                  type="text"
+                  className="form-control border-start-0"
+                  placeholder="Rechercher par crypto, méthode de paiement, vendeur..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
+                {searchTerm && (
+                  <button 
+                    className="btn btn-outline-secondary"
+                    onClick={() => setSearchTerm('')}
+                  >
+                    <i className="bi bi-x"></i>
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="col-md-5 col-lg-4">
+              <div className="d-flex gap-2">
+                <select
+                  className="form-select flex-grow-1"
+                  value={typeFilter}
+                  onChange={(e) => setTypeFilter(e.target.value as any)}
+                >
+                  <option value="all">Tous les types</option>
+                  <option value="buy">Achat seulement</option>
+                  <option value="sell">Vente seulement</option>
+                </select>
+                <button 
+                  className="btn btn-outline-primary"
+                  onClick={() => loadAds()}
+                  disabled={loading}
+                  title="Actualiser"
+                >
+                  <i className={`bi ${loading ? 'bi-arrow-clockwise spin' : 'bi-arrow-clockwise'}`}></i>
+                </button>
+              </div>
+            </div>
+          </div>
+          
+          {searchTerm || typeFilter !== 'all' ? (
+            <div className="mt-3">
+              <span className="badge bg-light text-dark fs-6">
+                {filteredAds.length} résultat{filteredAds.length !== 1 ? 's' : ''} 
+                {searchTerm && ` pour "${searchTerm}"`}
+                {typeFilter !== 'all' && ` (${typeFilter === 'buy' ? 'achats' : 'ventes'})`}
+              </span>
+            </div>
+          ) : null}
         </div>
       </div>
 
       {/* Liste des annonces */}
       {filteredAds.length === 0 ? (
         <div className="text-center py-5">
-          <div className="card shadow-sm">
+          <div className="card shadow-sm border-0">
             <div className="card-body py-5">
-              <i className="bi bi-inbox fs-1 text-muted mb-3"></i>
-              <h4>Aucune annonce trouvée</h4>
-              <p className="text-muted">
-                {searchTerm ? 'Ajustez vos critères de recherche' : 'Aucune annonce active pour le moment'}
+              <div className="text-muted mb-4">
+                <i className="bi bi-inbox display-1"></i>
+              </div>
+              <h4 className="text-dark mb-3">
+                {searchTerm ? 'Aucune annonce trouvée' : 'Aucune annonce disponible'}
+              </h4>
+              <p className="text-muted mb-4">
+                {searchTerm 
+                  ? 'Ajustez vos critères de recherche ou réessayez plus tard'
+                  : 'Revenez plus tard pour voir de nouvelles annonces'}
               </p>
+              {searchTerm && (
+                <button 
+                  className="btn btn-outline-primary"
+                  onClick={() => setSearchTerm('')}
+                >
+                  <i className="bi bi-arrow-counterclockwise me-1"></i>
+                  Réinitialiser la recherche
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -383,23 +502,28 @@ const PublicAdList: React.FC = () => {
           {filteredAds.map(ad => {
             const isUserAd = user && ad.user.id === user.id;
             const total = calculateTotal(ad);
+            const statusColor = getStatusColor(ad.status);
+            const isProcessing = processingTransaction === ad.id;
             
             return (
               <div key={ad.id} className="col">
-                <div className="card h-100 shadow-sm hover-shadow">
-                  <div className="card-body">
+                <div className="card h-100 shadow-sm border-0 hover-lift transition-all">
+                  <div className="card-body d-flex flex-column">
                     {/* En-tête */}
                     <div className="d-flex justify-content-between align-items-start mb-3">
                       <div>
-                        <span className={`badge ${ad.type === 'buy' ? 'bg-success' : 'bg-danger'}`}>
+                        <span className={`badge ${ad.type === 'buy' ? 'bg-success bg-opacity-10 text-success' : 'bg-danger bg-opacity-10 text-danger'} border ${ad.type === 'buy' ? 'border-success border-opacity-25' : 'border-danger border-opacity-25'} px-3 py-2`}>
+                          <i className={`bi ${ad.type === 'buy' ? 'bi-arrow-down-circle' : 'bi-arrow-up-circle'} me-1`}></i>
                           {ad.type === 'buy' ? 'ACHAT' : 'VENTE'}
                         </span>
-                        <span className="badge bg-secondary ms-2">
-                          {ad.status}
+                        <span className={`badge bg-${statusColor} bg-opacity-10 text-${statusColor} border border-${statusColor} border-opacity-25 ms-2 px-3 py-2`}>
+                          {ad.status === 'active' ? 'ACTIF' : 
+                           ad.status === 'paused' ? 'PAUSÉ' : 
+                           ad.status === 'completed' ? 'TERMINÉ' : 'ANNULÉ'}
                         </span>
                       </div>
                       <div className="text-end">
-                        <div className="h4 fw-bold text-primary">
+                        <div className="h3 fw-bold text-primary mb-0">
                           {ad.price.toLocaleString('fr-MA')} MAD
                         </div>
                         <small className="text-muted">/{ad.currency.code}</small>
@@ -407,78 +531,98 @@ const PublicAdList: React.FC = () => {
                     </div>
 
                     {/* Détails */}
-                    <h5 className="card-title fw-bold">
+                    <h5 className="card-title fw-bold text-dark mb-3">
                       {ad.type === 'buy' ? 'Achat de' : 'Vente de'} {ad.amount} {ad.currency.code}
                     </h5>
                     
                     <div className="mb-3">
-                      <i className="bi bi-credit-card text-muted me-2"></i>
-                      <span>{ad.paymentMethod}</span>
+                      <div className="d-flex align-items-center text-muted">
+                        <i className="bi bi-credit-card me-2"></i>
+                        <span className="fw-medium">{ad.paymentMethod}</span>
+                      </div>
                     </div>
 
                     {ad.terms && (
                       <div className="mb-3">
-                        <p className="text-muted small mb-0" style={{maxHeight: '3em', overflow: 'hidden'}}>
-                          <i className="bi bi-chat-left-text me-1"></i>
-                          {ad.terms}
-                        </p>
+                        <div className="bg-light rounded p-3">
+                          <small className="text-muted d-block mb-1">
+                            <i className="bi bi-chat-left-text me-1"></i>
+                            Conditions
+                          </small>
+                          <p className="mb-0 small" style={{maxHeight: '4em', overflow: 'hidden'}}>
+                            {ad.terms}
+                          </p>
+                        </div>
                       </div>
                     )}
 
                     {/* Total */}
                     <div className="mb-4">
-                      <div className="d-flex justify-content-between align-items-center">
-                        <span className="text-muted">Montant total</span>
-                        <span className="h4 fw-bold">
-                          {total.toLocaleString('fr-MA')} MAD
-                        </span>
+                      <div className="d-flex justify-content-between align-items-center bg-primary bg-opacity-5 rounded p-3">
+                        <div>
+                          <span className="text-muted small d-block">Montant total</span>
+                          <span className="h4 fw-bold text-dark">
+                            {total.toLocaleString('fr-MA')} MAD
+                          </span>
+                        </div>
+                        <div className="text-end">
+                          <span className="badge bg-primary bg-opacity-25 text-primary">
+                            <i className="bi bi-calculator me-1"></i>
+                            {ad.amount} × {ad.price}
+                          </span>
+                        </div>
                       </div>
                     </div>
 
                     {/* Utilisateur */}
-                    <div className="border-top pt-3">
+                    <div className="border-top pt-3 mt-auto">
                       <div className="d-flex justify-content-between align-items-center">
-                        <div>
-                          <div className="small text-muted">
-                            {ad.type === 'buy' ? 'Acheteur' : 'Vendeur'}
+                        <div className="d-flex align-items-center">
+                          <div className="rounded-circle bg-light d-flex align-items-center justify-content-center" style={{width: '40px', height: '40px'}}>
+                            <i className="bi bi-person text-muted"></i>
                           </div>
-                          <div className="fw-semibold">
-                            {ad.user.fullName}
-                            {ad.user.isVerified && (
-                              <i className="bi bi-patch-check-fill text-success ms-1"></i>
-                            )}
-                          </div>
-                          <div className="text-warning small">
-                            <i className="bi bi-star-fill me-1"></i>
-                            {ad.user.reputation?.toFixed(1) || '5.0'}
+                          <div className="ms-3">
+                            <div className="small text-muted">
+                              {ad.type === 'buy' ? 'Acheteur' : 'Vendeur'}
+                            </div>
+                            <div className="fw-semibold">
+                              {ad.user.fullName}
+                              {ad.user.isVerified && (
+                                <i className="bi bi-patch-check-fill text-success ms-1" title="Vérifié"></i>
+                              )}
+                            </div>
+                            <div className="text-warning small">
+                              <i className="bi bi-star-fill me-1"></i>
+                              {ad.user.reputation?.toFixed(1) || '5.0'}
+                            </div>
                           </div>
                         </div>
                         <div className="text-end">
-                          <div className="small text-muted">ID</div>
-                          <div className="fw-bold">#{ad.id}</div>
+                          <div className="small text-muted">ID Annonce</div>
+                          <div className="fw-bold text-primary">#{ad.id}</div>
                         </div>
                       </div>
                     </div>
 
                     {/* Boutons d'action */}
-                    <div className="mt-4">
+                    <div className="mt-4 pt-3 border-top">
                       {isUserAd ? (
-                        <div className="alert alert-info mb-0 py-2">
-                          <i className="bi bi-person me-2"></i>
-                          Votre annonce
+                        <div className="alert alert-info mb-0 py-2 d-flex align-items-center">
+                          <i className="bi bi-person-check me-2"></i>
+                          <span>Votre annonce</span>
                         </div>
                       ) : isAuthenticated ? (
                         <>
                           {/* Bouton principal */}
                           <button
-                            className={`btn w-100 mb-2 ${ad.type === 'sell' ? 'btn-success' : 'btn-warning'}`}
+                            className={`btn w-100 mb-2 ${ad.type === 'sell' ? 'btn-success' : 'btn-warning'} ${isProcessing ? 'disabled' : ''}`}
                             onClick={() => handleCreateTransaction(ad)}
-                            disabled={processingTransaction === ad.id}
+                            disabled={isProcessing}
                           >
-                            {processingTransaction === ad.id ? (
+                            {isProcessing ? (
                               <>
                                 <span className="spinner-border spinner-border-sm me-2"></span>
-                                Création...
+                                Création en cours...
                               </>
                             ) : (
                               <>
@@ -492,9 +636,10 @@ const PublicAdList: React.FC = () => {
                           <div className="row g-2">
                             <div className="col">
                               <button
-                                className="btn btn-outline-success w-100"
+                                className="btn btn-outline-success w-100 d-flex align-items-center justify-content-center"
                                 onClick={() => handleWhatsAppContact(ad)}
                                 disabled={!ad.user.phone}
+                                title={ad.user.phone ? `Contacter via WhatsApp` : 'Numéro non disponible'}
                               >
                                 <i className="bi bi-whatsapp me-2"></i>
                                 WhatsApp
@@ -504,7 +649,7 @@ const PublicAdList: React.FC = () => {
                         </>
                       ) : (
                         <button
-                          className="btn btn-warning w-100"
+                          className="btn btn-warning w-100 d-flex align-items-center justify-content-center"
                           onClick={() => navigate('/login', { state: { from: '/market' } })}
                         >
                           <i className="bi bi-shield-lock me-2"></i>
@@ -513,9 +658,19 @@ const PublicAdList: React.FC = () => {
                       )}
                     </div>
                   </div>
-                  <div className="card-footer bg-transparent text-muted small">
-                    <i className="bi bi-calendar me-1"></i>
-                    Publiée {formatDate(ad.createdAt)}
+                  <div className="card-footer bg-transparent border-top text-muted small d-flex justify-content-between align-items-center py-2">
+                    <div>
+                      <i className="bi bi-calendar me-1"></i>
+                      {formatDate(ad.createdAt)}
+                    </div>
+                    {ad.minAmountPerTransaction && (
+                      <div className="text-end">
+                        <small title="Limites de transaction">
+                          <i className="bi bi-arrows-collapse me-1"></i>
+                          {ad.minAmountPerTransaction.toLocaleString('fr-MA')} - {ad.maxAmountPerTransaction?.toLocaleString('fr-MA') || '∞'} {ad.currency.code}
+                        </small>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -523,6 +678,40 @@ const PublicAdList: React.FC = () => {
           })}
         </div>
       )}
+
+      {/* Pagination ou message de fin */}
+      {filteredAds.length > 0 && filteredAds.length === ads.length && ads.length >= 100 && (
+        <div className="text-center mt-5 pt-3">
+          <div className="alert alert-info d-inline-flex align-items-center">
+            <i className="bi bi-info-circle me-2"></i>
+            <span>Plus de 100 annonces actives. Utilisez la recherche pour affiner.</span>
+          </div>
+        </div>
+      )}
+
+      {/* Styles CSS inline */}
+      <style>
+        {`
+          .hover-lift {
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+          }
+          .hover-lift:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 .5rem 1.5rem rgba(0,0,0,.15) !important;
+          }
+          .spin {
+            animation: spin 1s linear infinite;
+          }
+          @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+          }
+          .toast {
+            min-width: 300px;
+            max-width: 400px;
+          }
+        `}
+      </style>
     </div>
   );
 };
