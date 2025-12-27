@@ -1,8 +1,13 @@
-// src/components/AdList.tsx - VERSION ULTRA SIMPLIFIÉE ET FONCTIONNELLE
+// src/components/AdList.tsx - VERSION CORRIGÉE ET COMPLÈTE
 import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { Link, useNavigate } from 'react-router-dom';
 import api from '../api/axiosConfig';
+import TransactionService from '../api/TransactionService';
+
+// ============================================
+// INTERFACES
+// ============================================
 
 interface User {
   id: number;
@@ -50,6 +55,10 @@ interface Notification {
   id: number;
 }
 
+// ============================================
+// COMPOSANT PRINCIPAL
+// ============================================
+
 const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
   const [ads, setAds] = useState<Ad[]>([]);
   const [loading, setLoading] = useState(true);
@@ -61,7 +70,7 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
   const navigate = useNavigate();
 
   // ============================================
-  // FONCTIONS UTILITAIRES SIMPLES
+  // FONCTIONS UTILITAIRES
   // ============================================
 
   const showNotification = useCallback((type: 'success' | 'error' | 'info' | 'warning', message: string) => {
@@ -97,7 +106,89 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
   };
 
   // ============================================
-  // CHARGEMENT DES ANNONCES SIMPLE
+  // FONCTIONS DE TRANSACTION (UNIQUES)
+  // ============================================
+
+  const handleCreateTransaction = async (ad: Ad) => {
+    if (!isAuthenticated || !user) {
+      showNotification('warning', 'Connectez-vous pour créer une transaction !');
+      navigate('/login');
+      return;
+    }
+
+    if (ad.user.id === user.id) {
+      showNotification('warning', 'Vous ne pouvez pas échanger avec votre propre annonce !');
+      return;
+    }
+
+    try {
+      console.log('🔄 Création transaction via service...');
+      
+      // ✅ UTILISATION DU SERVICE UNIFIÉ
+      const transaction = await TransactionService.createTransaction(ad, user.id);
+      
+      showNotification('success', 'Transaction créée avec succès !');
+      
+      // Redirection vers la messagerie
+      setTimeout(() => {
+        navigate('/dashboard/messages', { 
+          state: { 
+            transactionId: transaction.id,
+            autoFocus: true
+          }
+        });
+      }, 1000);
+      
+    } catch (err: any) {
+      console.error('❌ Erreur création transaction:', err);
+      showNotification('error', 'Erreur: ' + (err.message || 'Vérifiez votre connexion'));
+    }
+  };
+
+  // ============================================
+  // FONCTIONS DE CONTACT
+  // ============================================
+
+  const handleContactSeller = (ad: Ad) => {
+    if (!isAuthenticated) {
+      showNotification('warning', 'Connectez-vous pour contacter !');
+      navigate('/login');
+      return;
+    }
+
+    if (ad.user.id === user?.id) {
+      showNotification('info', 'Vous ne pouvez pas vous contacter vous-même');
+      return;
+    }
+
+    // Créer une transaction puis rediriger
+    handleCreateTransaction(ad);
+  };
+
+  const handleWhatsAppContact = (ad: Ad) => {
+    // Message simple
+    const message = `Bonjour ${ad.user.fullName},\nJe suis intéressé par votre annonce #${ad.id}.\n${ad.type === 'buy' ? 'Achat' : 'Vente'} de ${ad.amount} ${ad.currency.code} à ${ad.price} MAD.\nTotal: ${calculateTotal(ad).toLocaleString('fr-MA')} MAD\n\nMerci de me contacter.`;
+    
+    const encodedMessage = encodeURIComponent(message);
+    const whatsappUrl = `https://wa.me/?text=${encodedMessage}`;
+    
+    console.log('🔗 Ouverture WhatsApp...');
+    window.open(whatsappUrl, '_blank');
+  };
+
+  const openDirectMessage = (ad: Ad) => {
+    if (!isAuthenticated) {
+      showNotification('warning', 'Connectez-vous pour envoyer un message !');
+      navigate('/login');
+      return;
+    }
+
+    // SIMPLE: Ouvrir la page messages sans transaction
+    navigate('/dashboard/messages');
+  };
+
+  // ============================================
+  // CHARGEMENT DES ANNONCES
   // ============================================
 
   const loadAds = useCallback(async () => {
@@ -182,117 +273,7 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
   }, [loadAds]);
 
   // ============================================
-  // FONCTIONS DE TRANSACTION ULTRA SIMPLE
-  // ============================================
-
-  const createTransaction = async (ad: Ad) => {
-    if (!isAuthenticated || !user) {
-      showNotification('warning', 'Connectez-vous pour créer une transaction !');
-      navigate('/login');
-      return;
-    }
-
-    if (ad.user.id === user.id) {
-      showNotification('warning', 'Vous ne pouvez pas échanger avec votre propre annonce !');
-      return;
-    }
-
-    try {
-      console.log('🔄 Tentative de création de transaction...');
-      
-      // FORMAT SIMPLE - Sans /api dans les URLs (axios l'ajoute déjà)
-      const transactionData = {
-        ad: `/ads/${ad.id}`,  // IMPORTANT: Sans /api au début
-        buyer: ad.type === 'sell' ? `/users/${user.id}` : `/users/${ad.user.id}`,
-        seller: ad.type === 'sell' ? `/users/${ad.user.id}` : `/users/${user.id}`,
-        usdtAmount: ad.amount,
-        fiatAmount: calculateTotal(ad),
-        status: 'pending'
-      };
-
-      console.log('📦 Données transaction:', transactionData);
-
-      // Essayer SANS /api d'abord (axios l'ajoute déjà)
-      const endpoints = ['/transactions', '/api/transactions'];
-      
-      for (const endpoint of endpoints) {
-        try {
-          console.log(`🔄 POST vers: ${endpoint}`);
-          const response = await api.post(endpoint, transactionData);
-          console.log('✅ Transaction créée:', response.data);
-          
-          showNotification('success', 'Transaction créée avec succès !');
-          
-          // Rediriger vers la messagerie
-          setTimeout(() => {
-            navigate('/dashboard/messages', { 
-              state: { 
-                transactionId: response.data.id,
-                autoFocus: true
-              }
-            });
-          }, 1000);
-          
-          return;
-          
-        } catch (err: any) {
-          console.log(`❌ Échec avec ${endpoint}:`, err.response?.status || err.message);
-          continue;
-        }
-      }
-      
-      throw new Error('Impossible de créer la transaction');
-      
-    } catch (err: any) {
-      console.error('❌ Erreur création transaction:', err);
-      showNotification('error', 'Erreur: ' + (err.message || 'Vérifiez votre connexion'));
-    }
-  };
-
-  // ============================================
-  // FONCTIONS DE CONTACT ULTRA SIMPLES
-  // ============================================
-
-  const handleContactSeller = (ad: Ad) => {
-    if (!isAuthenticated) {
-      showNotification('warning', 'Connectez-vous pour contacter !');
-      navigate('/login');
-      return;
-    }
-
-    if (ad.user.id === user?.id) {
-      showNotification('info', 'Vous ne pouvez pas vous contacter vous-même');
-      return;
-    }
-
-    // Créer une transaction puis rediriger
-    createTransaction(ad);
-  };
-
-  const handleWhatsAppContact = (ad: Ad) => {
-    // Message simple
-    const message = `Bonjour ${ad.user.fullName},\nJe suis intéressé par votre annonce #${ad.id}.\n${ad.type === 'buy' ? 'Achat' : 'Vente'} de ${ad.amount} ${ad.currency.code} à ${ad.price} MAD.\nTotal: ${calculateTotal(ad).toLocaleString('fr-MA')} MAD\n\nMerci de me contacter.`;
-    
-    const encodedMessage = encodeURIComponent(message);
-    const whatsappUrl = `https://wa.me/?text=${encodedMessage}`;
-    
-    console.log('🔗 Ouverture WhatsApp...');
-    window.open(whatsappUrl, '_blank');
-  };
-
-  const openDirectMessage = (ad: Ad) => {
-    if (!isAuthenticated) {
-      showNotification('warning', 'Connectez-vous pour envoyer un message !');
-      navigate('/login');
-      return;
-    }
-
-    // SIMPLE: Ouvrir la page messages sans transaction
-    navigate('/dashboard/messages');
-  };
-
-  // ============================================
-  // FILTRAGE SIMPLE
+  // FILTRAGE
   // ============================================
 
   const filteredAds = ads.filter(ad => {
@@ -311,7 +292,7 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
   });
 
   // ============================================
-  // RENDU SIMPLE
+  // RENDU
   // ============================================
 
   if (loading) {

@@ -1,4 +1,4 @@
-// src/components/MessagesPage.tsx - VERSION SIMPLIFIÉE ET FONCTIONNELLE
+// src/components/MessagesPage.tsx - VERSION CORRIGÉE ET OPTIMISÉE
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -12,8 +12,8 @@ interface User {
 
 interface Transaction {
   id: number;
-  amount: number;
-  price: number;
+  usdtAmount: number;
+  fiatAmount: number;
   status: string;
   buyer: User;
   seller: User;
@@ -37,6 +37,120 @@ interface Message {
   };
 }
 
+// 🔧 SERVICE DE MESSAGERIE
+class MessageService {
+  static async loadTransactions(userId: number) {
+    try {
+      console.log('📥 Chargement des transactions...');
+      
+      // ✅ ENDPOINT CORRECT - Sans /api
+      const response = await api.get('/transactions');
+      
+      let data: any[] = [];
+      if (response.data['hydra:member']) {
+        data = response.data['hydra:member'];
+      } else if (Array.isArray(response.data)) {
+        data = response.data;
+      }
+      
+      console.log(`📊 ${data.length} transactions récupérées`);
+
+      // Filtrer les transactions de l'utilisateur
+      return data.filter((tx: any) => {
+        const buyerId = typeof tx.buyer === 'object' ? tx.buyer.id : tx.buyer;
+        const sellerId = typeof tx.seller === 'object' ? tx.seller.id : tx.seller;
+        
+        return buyerId === userId || sellerId === userId;
+      }).map((tx: any) => ({
+        id: tx.id,
+        usdtAmount: tx.usdtAmount || 0,
+        fiatAmount: tx.fiatAmount || 0,
+        status: tx.status || 'pending',
+        buyer: typeof tx.buyer === 'object' ? {
+          id: tx.buyer.id,
+          fullName: tx.buyer.fullName || tx.buyer.full_name || 'Acheteur',
+          email: tx.buyer.email || ''
+        } : { id: 0, fullName: 'Acheteur', email: '' },
+        seller: typeof tx.seller === 'object' ? {
+          id: tx.seller.id,
+          fullName: tx.seller.fullName || tx.seller.full_name || 'Vendeur',
+          email: tx.seller.email || ''
+        } : { id: 0, fullName: 'Vendeur', email: '' },
+        ad: {
+          id: tx.ad?.id || 0,
+          type: tx.ad?.type || 'buy',
+          currency: {
+            code: tx.ad?.currency?.code || 'USDT'
+          }
+        },
+        createdAt: tx.createdAt || tx.created_at
+      }));
+      
+    } catch (error) {
+      console.error('❌ Erreur chargement transactions:', error);
+      return [];
+    }
+  }
+
+  static async loadMessages(transactionId: number) {
+    try {
+      console.log(`📨 Chargement messages pour transaction ${transactionId}`);
+      
+      // ✅ ENDPOINT CORRECT - Sans /api
+      const response = await api.get(`/chat_messages`, {
+        params: {
+          'transaction.id': transactionId,
+          'order[createdAt]': 'asc'
+        }
+      });
+      
+      let data: any[] = [];
+      if (response.data['hydra:member']) {
+        data = response.data['hydra:member'];
+      } else if (Array.isArray(response.data)) {
+        data = response.data;
+      }
+      
+      return data.map((msg: any) => ({
+        id: msg.id,
+        sender: {
+          id: msg.sender?.id || 0,
+          fullName: msg.sender?.fullName || msg.sender?.full_name || 'Expéditeur',
+          email: msg.sender?.email || ''
+        },
+        message: msg.message || '(Message vide)',
+        createdAt: msg.createdAt || msg.created_at,
+        transaction: { id: transactionId }
+      }));
+      
+    } catch (error) {
+      console.error(`❌ Erreur chargement messages:`, error);
+      return [];
+    }
+  }
+
+  static async sendMessage(transactionId: number, userId: number, message: string) {
+    try {
+      console.log(`📤 Envoi message transaction ${transactionId}`);
+      
+      // ✅ FORMAT CORRECT - URLs sans /api
+      const messageData = {
+        transaction: `/transactions/${transactionId}`,
+        sender: `/users/${userId}`,
+        message: message.trim()
+      };
+      
+      const response = await api.post('/chat_messages', messageData);
+      console.log('✅ Message envoyé avec succès');
+      return response.data;
+      
+    } catch (error: any) {
+      console.error('❌ Erreur envoi message:', error);
+      throw error;
+    }
+  }
+}
+
 const MessagesPage: React.FC = () => {
   const { user } = useAuth();
   const location = useLocation();
@@ -50,7 +164,7 @@ const MessagesPage: React.FC = () => {
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Récupérer l'état de la navigation
+  // 📍 Récupérer l'ID de transaction depuis la navigation
   useEffect(() => {
     const state = location.state as any;
     if (state?.transactionId) {
@@ -58,260 +172,55 @@ const MessagesPage: React.FC = () => {
     }
   }, [location]);
 
-  // Charger les transactions
+  // 📥 Charger les transactions au démarrage
   useEffect(() => {
-    if (user) {
-      loadTransactions();
-    } else {
-      setLoading(false);
-    }
+    const loadData = async () => {
+      if (user) {
+        try {
+          setLoading(true);
+          const transactionsData = await MessageService.loadTransactions(user.id);
+          setTransactions(transactionsData);
+          
+          // Si pas de transaction sélectionnée, prendre la première
+          if (!selectedTransaction && transactionsData.length > 0) {
+            setSelectedTransaction(transactionsData[0].id);
+          }
+        } catch (error) {
+          console.error('Erreur initialisation:', error);
+        } finally {
+          setLoading(false);
+        }
+      }
+    };
+    
+    loadData();
   }, [user]);
 
-  // Charger les messages
+  // 📨 Charger les messages quand la transaction change
   useEffect(() => {
     if (selectedTransaction) {
-      loadMessages(selectedTransaction);
+      const loadMessages = async () => {
+        const messagesData = await MessageService.loadMessages(selectedTransaction);
+        setMessages(messagesData);
+        
+        // Scroll vers le bas
+        setTimeout(() => {
+          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }, 100);
+      };
+      
+      loadMessages();
     }
   }, [selectedTransaction]);
 
-  // Fonction pour charger les transactions - SIMPLIFIÉE
-  const loadTransactions = async () => {
-    try {
-      setLoading(true);
-      console.log('🔍 Chargement des transactions...');
-      
-      // Essayer plusieurs endpoints
-      const endpoints = [
-        '/api/transactions',
-        '/transactions'
-      ];
-
-      let response = null;
-      let data = [];
-      
-      for (const endpoint of endpoints) {
-        try {
-          response = await api.get(endpoint);
-          console.log(`✅ Réussi avec: ${endpoint}`);
-          
-          // Extraire les données selon le format
-          if (response.data['hydra:member']) {
-            data = response.data['hydra:member'];
-          } else if (Array.isArray(response.data)) {
-            data = response.data;
-          } else if (response.data.data) {
-            data = response.data.data;
-          }
-          
-          break;
-        } catch (err) {
-          console.log(`❌ Échec avec: ${endpoint}`);
-          continue;
-        }
-      }
-
-      if (!response) {
-        console.log('⚠️ Aucune transaction trouvée');
-        setTransactions([]);
-        return;
-      }
-
-      console.log('📊 Données brutes des transactions:', data);
-
-      // Filtrer pour ne garder que les transactions de l'utilisateur
-      const userTransactions = data.filter((tx: any) => {
-        if (!tx.buyer || !tx.seller) return false;
-        
-        // Récupérer les IDs selon le format
-        const buyerId = typeof tx.buyer === 'object' ? tx.buyer.id : tx.buyer;
-        const sellerId = typeof tx.seller === 'object' ? tx.seller.id : tx.seller;
-        
-        return user && (buyerId === user.id || sellerId === user.id);
-      });
-
-      console.log(`📊 ${userTransactions.length} transactions pour l'utilisateur`);
-
-      // Formater les transactions
-      const formattedTransactions: Transaction[] = userTransactions.map((tx: any) => {
-        // Fonction pour formater un utilisateur
-        const formatUser = (userData: any, defaultName: string): User => {
-          if (!userData) {
-            return { id: 0, fullName: defaultName, email: '' };
-          }
-          if (typeof userData === 'object') {
-            return {
-              id: userData.id || 0,
-              fullName: userData.fullName || userData.full_name || userData.name || defaultName,
-              email: userData.email || ''
-            };
-          }
-          return { id: 0, fullName: defaultName, email: '' };
-        };
-
-        return {
-          id: tx.id,
-          amount: parseFloat(tx.amount) || parseFloat(tx.usdtAmount) || 0,
-          price: parseFloat(tx.price) || parseFloat(tx.fiatAmount) || 0,
-          status: tx.status || 'pending',
-          buyer: formatUser(tx.buyer, 'Acheteur'),
-          seller: formatUser(tx.seller, 'Vendeur'),
-          ad: {
-            id: tx.ad?.id || 0,
-            type: tx.ad?.type || 'buy',
-            currency: {
-              code: tx.ad?.currency?.code || 'USDT'
-            }
-          },
-          createdAt: tx.createdAt || tx.created_at || new Date().toISOString()
-        };
-      });
-
-      console.log('📊 Transactions formatées:', formattedTransactions);
-      setTransactions(formattedTransactions);
-
-      // Sélectionner la première transaction
-      if (formattedTransactions.length > 0 && !selectedTransaction) {
-        setSelectedTransaction(formattedTransactions[0].id);
-      }
-
-    } catch (error) {
-      console.error('❌ Erreur chargement transactions:', error);
-      setTransactions([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Fonction pour charger les messages - SIMPLIFIÉE
-  const loadMessages = async (transactionId: number) => {
-    try {
-      console.log(`🔍 Chargement messages pour transaction ${transactionId}`);
-      
-      // Essayer plusieurs endpoints
-      const endpoints = [
-        `/api/chat_messages?transaction.id=${transactionId}`,
-        `/chat_messages?transaction.id=${transactionId}`,
-        `/api/messages?transaction.id=${transactionId}`,
-        `/messages?transaction.id=${transactionId}`
-      ];
-
-      let response = null;
-      let data = [];
-      
-      for (const endpoint of endpoints) {
-        try {
-          response = await api.get(endpoint);
-          console.log(`✅ Réussi avec: ${endpoint}`);
-          
-          // Extraire les données
-          if (response.data['hydra:member']) {
-            data = response.data['hydra:member'];
-          } else if (Array.isArray(response.data)) {
-            data = response.data;
-          } else if (response.data.data) {
-            data = response.data.data;
-          }
-          
-          break;
-        } catch (err) {
-          console.log(`❌ Échec avec: ${endpoint}`);
-          continue;
-        }
-      }
-
-      if (!response) {
-        console.log('⚠️ Aucun message trouvé');
-        setMessages([]);
-        return;
-      }
-
-      console.log('📨 Messages bruts:', data);
-
-      // Formater les messages
-      const formattedMessages: Message[] = data.map((msg: any) => ({
-        id: msg.id,
-        sender: {
-          id: msg.sender?.id || 0,
-          fullName: msg.sender?.fullName || msg.sender?.full_name || msg.sender?.name || 'Expéditeur',
-          email: msg.sender?.email || ''
-        },
-        message: msg.message || msg.content || '(Message vide)',
-        createdAt: msg.createdAt || msg.created_at || new Date().toISOString(),
-        transaction: { id: transactionId }
-      }));
-
-      console.log(`📨 ${formattedMessages.length} messages chargés:`, formattedMessages);
-      setMessages(formattedMessages);
-      
-      // Scroll vers le bas
-      setTimeout(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }, 100);
-      
-    } catch (error) {
-      console.error('❌ Erreur chargement messages:', error);
-      setMessages([]);
-    }
-  };
-
-  // Fonction pour envoyer un message - SIMPLIFIÉE
+  // 📤 Envoyer un message
   const sendMessage = async () => {
     if (!newMessage.trim() || !selectedTransaction || !user || sending) return;
     
     try {
       setSending(true);
-      console.log(`📤 Envoi message pour transaction ${selectedTransaction}`);
       
-      // TEST : Créer d'abord un message simple
-      const messageData = {
-        message: newMessage.trim(),
-        transaction: `/api/transactions/${selectedTransaction}`,
-        sender: `/api/users/${user.id}`
-      };
-      
-      console.log('📦 Données du message:', messageData);
-      
-      // Essayer plusieurs endpoints
-      const endpoints = [
-        '/api/chat_messages',
-        '/chat_messages'
-      ];
-      
-      let response = null;
-      
-      for (const endpoint of endpoints) {
-        try {
-          console.log(`🔄 Tentative POST vers: ${endpoint}`);
-          response = await api.post(endpoint, messageData);
-          console.log(`✅ Message envoyé!`, response.data);
-          break;
-        } catch (err: any) {
-          console.log(`❌ Échec ${endpoint}:`, err.response?.status, err.response?.data);
-          
-          // Si c'est une erreur 400, essayer un format différent
-          if (err.response?.status === 400) {
-            try {
-              const altMessageData = {
-                content: newMessage.trim(),
-                transactionId: selectedTransaction,
-                senderId: user.id
-              };
-              console.log('🔄 Tentative avec format alternatif:', altMessageData);
-              response = await api.post(endpoint, altMessageData);
-              console.log(`✅ Message envoyé avec format alternatif!`);
-              break;
-            } catch (altErr) {
-              console.log('❌ Format alternatif échoué aussi');
-            }
-          }
-        }
-      }
-      
-      if (!response) {
-        throw new Error('Impossible d\'envoyer le message');
-      }
-      
-      // Ajouter le message localement
+      // Message temporaire pour feedback immédiat
       const tempMessage: Message = {
         id: Date.now(),
         sender: {
@@ -327,24 +236,28 @@ const MessagesPage: React.FC = () => {
       setMessages(prev => [...prev, tempMessage]);
       setNewMessage('');
       
-      // Recharger les messages après 1 seconde
-      setTimeout(() => {
-        loadMessages(selectedTransaction);
-      }, 1000);
+      // Envoyer réellement le message
+      await MessageService.sendMessage(selectedTransaction, user.id, newMessage);
+      
+      // Recharger les messages pour avoir l'ID réel
+      const updatedMessages = await MessageService.loadMessages(selectedTransaction);
+      setMessages(updatedMessages);
       
     } catch (error: any) {
-      console.error('❌ Erreur envoi message:', error);
-      alert(`Erreur: ${error.message || 'Impossible d\'envoyer le message'}`);
+      console.error('Erreur envoi:', error);
+      alert('Erreur lors de l\'envoi du message');
     } finally {
       setSending(false);
     }
   };
 
-  // Fonctions utilitaires
+  // 🛠️ Fonctions utilitaires
   const formatTime = (dateString: string) => {
     try {
-      const date = new Date(dateString);
-      return date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+      return new Date(dateString).toLocaleTimeString('fr-FR', { 
+        hour: '2-digit', 
+        minute: '2-digit' 
+      });
     } catch {
       return '--:--';
     }
@@ -355,84 +268,65 @@ const MessagesPage: React.FC = () => {
     return transaction.buyer.id === user.id ? transaction.seller : transaction.buyer;
   };
 
-  const handleRefresh = () => {
-    loadTransactions();
-    if (selectedTransaction) {
-      loadMessages(selectedTransaction);
+  const handleRefresh = async () => {
+    if (user) {
+      const transactionsData = await MessageService.loadTransactions(user.id);
+      setTransactions(transactionsData);
+      
+      if (selectedTransaction) {
+        const messagesData = await MessageService.loadMessages(selectedTransaction);
+        setMessages(messagesData);
+      }
     }
   };
 
-  const handleGoToMarketplace = () => {
-    navigate('/market');
-  };
+  const selectedTx = transactions.find(tx => tx.id === selectedTransaction);
 
-  // Rendu
+  // 🎨 Rendu
   if (loading) {
     return (
-      <div className="container-fluid py-4">
+      <div className="container py-5">
         <div className="text-center py-5">
-          <div className="spinner-border text-primary" role="status">
-            <span className="visually-hidden">Chargement...</span>
-          </div>
+          <div className="spinner-border text-primary"></div>
           <p className="mt-3">Chargement des conversations...</p>
         </div>
       </div>
     );
   }
 
-  const selectedTx = transactions.find(tx => tx.id === selectedTransaction);
-
   return (
-    <div className="container-fluid py-4">
-      <div className="row">
-        <div className="col-12">
-          <div className="d-flex justify-content-between align-items-center mb-4">
-            <h1 className="h3 mb-0">
-              <i className="bi bi-chat-left-text me-2"></i>
-              Messagerie
-            </h1>
-            <div className="d-flex gap-2">
-              <button 
-                className="btn btn-outline-primary btn-sm"
-                onClick={handleRefresh}
-                title="Actualiser"
-              >
-                <i className="bi bi-arrow-clockwise"></i>
-              </button>
-              <button 
-                className="btn btn-primary btn-sm"
-                onClick={handleGoToMarketplace}
-              >
-                <i className="bi bi-plus-circle me-1"></i>
-                Nouvelle transaction
-              </button>
+    <div className="container py-4">
+      <div className="row g-4">
+        {/* Colonne gauche - Liste des conversations */}
+        <div className="col-lg-4">
+          <div className="card shadow-sm h-100">
+            <div className="card-header bg-white">
+              <div className="d-flex justify-content-between align-items-center">
+                <h5 className="mb-0">
+                  <i className="bi bi-chat-left-text me-2"></i>
+                  Conversations
+                </h5>
+                <button 
+                  className="btn btn-sm btn-outline-primary"
+                  onClick={handleRefresh}
+                  title="Actualiser"
+                >
+                  <i className="bi bi-arrow-clockwise"></i>
+                </button>
+              </div>
             </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="row g-3">
-        {/* Liste des conversations */}
-        <div className="col-md-4">
-          <div className="card h-100 shadow-sm">
-            <div className="card-header bg-white border-bottom">
-              <h5 className="mb-0">
-                <i className="bi bi-list-ul me-2"></i>
-                Conversations ({transactions.length})
-              </h5>
-            </div>
-            <div className="card-body p-0" style={{ maxHeight: '70vh', overflowY: 'auto' }}>
+            
+            <div className="card-body p-0">
               {transactions.length === 0 ? (
                 <div className="text-center py-5 text-muted">
-                  <i className="bi bi-chat display-6 mb-3"></i>
-                  <h5>Aucune conversation</h5>
-                  <p className="small">Commencez une transaction pour démarrer une conversation</p>
+                  <i className="bi bi-chat-dots display-6 mb-3"></i>
+                  <p>Aucune conversation</p>
                   <button 
-                    className="btn btn-sm btn-primary mt-2"
-                    onClick={handleGoToMarketplace}
+                    className="btn btn-sm btn-primary"
+                    onClick={() => navigate('/market')}
                   >
                     <i className="bi bi-shop me-1"></i>
-                    Voir le marketplace
+                    Explorer le marketplace
                   </button>
                 </div>
               ) : (
@@ -452,31 +346,26 @@ const MessagesPage: React.FC = () => {
                         <div className="d-flex align-items-center">
                           <div className="flex-shrink-0">
                             <div className="rounded-circle bg-light p-2">
-                              <i className="bi bi-person fs-5"></i>
+                              <i className="bi bi-person"></i>
                             </div>
                           </div>
                           <div className="flex-grow-1 ms-3">
-                            <div className="d-flex justify-content-between align-items-start">
-                              <div>
-                                <h6 className="mb-1">{otherUser.fullName}</h6>
-                                <p className="small mb-0">
-                                  {tx.ad?.type === 'buy' ? 'Achat' : 'Vente'} de {tx.amount} {tx.ad?.currency?.code}
-                                </p>
-                                <p className="small text-muted mb-0">
-                                  {tx.price.toLocaleString('fr-MA')} MAD
-                                </p>
-                              </div>
-                              <div className="text-end">
-                                <span className={`badge ${
-                                  tx.status === 'completed' ? 'bg-success' :
-                                  tx.status === 'pending' ? 'bg-warning' :
-                                  tx.status === 'cancelled' ? 'bg-danger' :
-                                  'bg-secondary'
-                                }`}>
-                                  {tx.status}
-                                </span>
-                              </div>
+                            <div className="d-flex justify-content-between">
+                              <h6 className="mb-1">{otherUser.fullName}</h6>
+                              <span className={`badge ${
+                                tx.status === 'completed' ? 'bg-success' :
+                                tx.status === 'pending' ? 'bg-warning' :
+                                'bg-secondary'
+                              }`}>
+                                {tx.status}
+                              </span>
                             </div>
+                            <p className="small mb-1">
+                              {tx.ad.type === 'buy' ? 'Achat' : 'Vente'} de {tx.usdtAmount} {tx.ad.currency.code}
+                            </p>
+                            <p className="small text-muted mb-0">
+                              {tx.fiatAmount.toLocaleString('fr-MA')} MAD
+                            </p>
                           </div>
                         </div>
                       </button>
@@ -488,35 +377,22 @@ const MessagesPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Messages */}
-        <div className="col-md-8">
-          <div className="card h-100 shadow-sm">
-            <div className="card-header bg-white border-bottom">
+        {/* Colonne droite - Messages */}
+        <div className="col-lg-8">
+          <div className="card shadow-sm h-100">
+            <div className="card-header bg-white">
               {selectedTx ? (
                 <div>
                   <h5 className="mb-1">
-                    <i className="bi bi-chat-left-text me-2"></i>
+                    <i className="bi bi-chat-dots me-2"></i>
                     Conversation avec {getOtherUser(selectedTx).fullName}
                   </h5>
-                  <div className="small text-muted">
-                    Transaction #{selectedTx.id} • 
-                    {selectedTx.ad?.type === 'buy' ? 'Achat' : 'Vente'} de {selectedTx.amount} {selectedTx.ad?.currency?.code} • 
-                    {selectedTx.price.toLocaleString('fr-MA')} MAD • 
-                    Statut: <span className={`badge ${
-                      selectedTx.status === 'completed' ? 'bg-success' :
-                      selectedTx.status === 'pending' ? 'bg-warning' :
-                      selectedTx.status === 'cancelled' ? 'bg-danger' :
-                      'bg-secondary'
-                    }`}>
-                      {selectedTx.status}
-                    </span>
-                  </div>
+                  <p className="small text-muted mb-0">
+                    Transaction #{selectedTx.id} • {selectedTx.ad.type === 'buy' ? 'Achat' : 'Vente'} de {selectedTx.usdtAmount} {selectedTx.ad.currency.code}
+                  </p>
                 </div>
               ) : (
-                <h5 className="mb-0">
-                  <i className="bi bi-chat-left me-2"></i>
-                  Sélectionnez une conversation
-                </h5>
+                <h5 className="mb-0">Sélectionnez une conversation</h5>
               )}
             </div>
             
@@ -525,39 +401,24 @@ const MessagesPage: React.FC = () => {
               style={{ 
                 height: '60vh', 
                 overflowY: 'auto',
-                background: '#f8f9fa'
+                backgroundColor: '#f8f9fa'
               }}
             >
               {!selectedTx ? (
                 <div className="text-center py-5">
-                  <div className="display-1 text-muted mb-4">
-                    <i className="bi bi-chat-left"></i>
-                  </div>
-                  <h4 className="mb-3">Sélectionnez une conversation</h4>
+                  <i className="bi bi-chat-left-text display-6 text-muted mb-3"></i>
+                  <h5>Sélectionnez une conversation</h5>
                   <p className="text-muted">
                     Choisissez une transaction dans la liste pour voir les messages
                   </p>
                 </div>
               ) : messages.length === 0 ? (
                 <div className="text-center py-5">
-                  <div className="display-1 text-muted mb-4">
-                    <i className="bi bi-chat-left-dots"></i>
-                  </div>
-                  <h4 className="mb-3">Aucun message</h4>
+                  <i className="bi bi-chat-left-dots display-6 text-muted mb-3"></i>
+                  <h5>Aucun message</h5>
                   <p className="text-muted">
-                    Soyez le premier à envoyer un message pour cette transaction
+                    Soyez le premier à envoyer un message
                   </p>
-                  <div className="bg-white p-3 rounded border">
-                    <p className="mb-1">
-                      <strong>Détails de la transaction :</strong>
-                    </p>
-                    <p className="mb-1">
-                      {selectedTx.ad?.type === 'buy' ? 'Achat' : 'Vente'} de {selectedTx.amount} {selectedTx.ad?.currency?.code}
-                    </p>
-                    <p className="mb-0">
-                      Montant total : {selectedTx.price.toLocaleString('fr-MA')} MAD
-                    </p>
-                  </div>
                 </div>
               ) : (
                 <div>
@@ -566,30 +427,22 @@ const MessagesPage: React.FC = () => {
                     
                     return (
                       <div key={msg.id || index} className={`mb-3 ${isUser ? 'text-end' : ''}`}>
-                        <div className="d-inline-block" style={{ maxWidth: '80%' }}>
-                          {!isUser && (
-                            <div className="small text-muted mb-1">
-                              <i className="bi bi-person-circle me-1"></i>
-                              {msg.sender.fullName}
-                            </div>
-                          )}
-                          <div className={`p-3 rounded-3 ${
-                            isUser 
-                              ? 'bg-primary text-white' 
-                              : 'bg-white border text-dark'
-                          }`}
-                          style={{ 
-                            boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
-                            borderRadius: isUser ? '18px 18px 4px 18px' : '18px 18px 18px 4px'
-                          }}>
-                            <div style={{ whiteSpace: 'pre-line' }}>
-                              {msg.message}
-                            </div>
+                        {!isUser && (
+                          <div className="small text-muted mb-1">
+                            <i className="bi bi-person-circle me-1"></i>
+                            {msg.sender.fullName}
                           </div>
-                          <div className={`small text-muted mt-1 ${isUser ? 'text-end' : ''}`}>
-                            <i className="bi bi-clock me-1"></i>
-                            {formatTime(msg.createdAt)}
-                          </div>
+                        )}
+                        <div className={`p-3 rounded-3 d-inline-block ${
+                          isUser 
+                            ? 'bg-primary text-white' 
+                            : 'bg-white border'
+                        }`} style={{ maxWidth: '80%' }}>
+                          {msg.message}
+                        </div>
+                        <div className={`small text-muted mt-1 ${isUser ? 'text-end' : ''}`}>
+                          <i className="bi bi-clock me-1"></i>
+                          {formatTime(msg.createdAt)}
                         </div>
                       </div>
                     );
@@ -599,16 +452,17 @@ const MessagesPage: React.FC = () => {
               )}
             </div>
 
+            {/* Zone d'envoi de message */}
             {selectedTx && (
-              <div className="card-footer border-top bg-white">
+              <div className="card-footer bg-white">
                 <div className="input-group">
                   <input
                     type="text"
                     className="form-control"
-                    placeholder={`Écrivez un message à ${getOtherUser(selectedTx).fullName}...`}
+                    placeholder={`Message à ${getOtherUser(selectedTx).fullName}...`}
                     value={newMessage}
                     onChange={(e) => setNewMessage(e.target.value)}
-                    onKeyPress={(e) => e.key === 'Enter' && !sending && sendMessage()}
+                    onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
                     disabled={sending}
                   />
                   <button
@@ -619,16 +473,9 @@ const MessagesPage: React.FC = () => {
                     {sending ? (
                       <span className="spinner-border spinner-border-sm"></span>
                     ) : (
-                      <>
-                        <i className="bi bi-send me-2"></i>
-                        Envoyer
-                      </>
+                      <i className="bi bi-send"></i>
                     )}
                   </button>
-                </div>
-                <div className="mt-2 small text-muted">
-                  <i className="bi bi-info-circle me-1"></i>
-                  Appuyez sur Entrée pour envoyer
                 </div>
               </div>
             )}
