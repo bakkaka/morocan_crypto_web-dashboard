@@ -1,10 +1,10 @@
-// src/api/TransactionService.ts - SERVICE UNIFIÉ POUR LES TRANSACTIONS
+// src/api/TransactionService.ts - VERSION COMPLÈTE AVEC TOUTES LES MÉTHODES
 import api from './axiosConfig';
 
 export interface TransactionData {
-  ad: string;            // Format: "/ads/{id}"
-  buyer: string;         // Format: "/users/{id}"
-  seller: string;        // Format: "/users/{id}"
+  ad: string;            // Format: "/api/ads/{id}"
+  buyer: string;         // Format: "/api/users/{id}"
+  seller: string;        // Format: "/api/users/{id}"
   usdtAmount: number;
   fiatAmount: number;
   status: 'pending' | 'completed' | 'cancelled' | 'disputed';
@@ -13,24 +13,22 @@ export interface TransactionData {
 }
 
 export interface MessageData {
-  transaction: string;   // Format: "/transactions/{id}"
-  sender: string;        // Format: "/users/{id}"
+  transaction: string;   // Format: "/api/transactions/{id}"
+  sender: string;        // Format: "/api/users/{id}"
   message: string;
 }
 
 class TransactionService {
   /**
-   * CRÉER UNE TRANSACTION
-   * Fonctionne avec API Platform Symfony
+   * CRÉER UNE TRANSACTION - FORMAT API PLATFORM
    */
   static async createTransaction(ad: any, userId: number): Promise<any> {
     const totalAmount = ad.amount * ad.price;
     
-    // ✅ FORMAT CORRECT POUR API PLATFORM
     const transactionData: TransactionData = {
-      ad: `/ads/${ad.id}`,
-      buyer: ad.type === 'sell' ? `/users/${userId}` : `/users/${ad.user.id}`,
-      seller: ad.type === 'sell' ? `/users/${ad.user.id}` : `/users/${userId}`,
+      ad: `/api/ads/${ad.id}`,
+      buyer: ad.type === 'sell' ? `/api/users/${userId}` : `/api/users/${ad.user.id}`,
+      seller: ad.type === 'sell' ? `/api/users/${ad.user.id}` : `/api/users/${userId}`,
       usdtAmount: ad.amount,
       fiatAmount: totalAmount,
       status: 'pending',
@@ -41,20 +39,27 @@ class TransactionService {
     console.log('📤 Création transaction:', transactionData);
 
     try {
-      const response = await api.post('/transactions', transactionData);
+      const response = await api.post('/api/transactions', transactionData);
       console.log('✅ Transaction créée:', response.data);
       return response.data;
     } catch (error: any) {
       console.error('❌ Erreur création transaction:', error);
       
-      // Fallback pour debugging
-      if (error.response?.status === 404) {
-        console.log('🔄 Tentative avec endpoint alternatif...');
+      // Fallback sans /api
+      if (error.response?.status === 400 || error.response?.status === 404) {
+        console.log('🔄 Tentative avec format alternatif...');
         try {
-          const response = await api.post('/api/transactions', transactionData);
+          const altData = {
+            ...transactionData,
+            ad: `api/ads/${ad.id}`,
+            buyer: `api/users/${ad.type === 'sell' ? userId : ad.user.id}`,
+            seller: `api/users/${ad.type === 'sell' ? ad.user.id : userId}`
+          };
+          
+          const response = await api.post('/transactions', altData);
           return response.data;
         } catch (fallbackError) {
-          throw fallbackError;
+          console.error('❌ Fallback échoué:', fallbackError);
         }
       }
       
@@ -64,32 +69,36 @@ class TransactionService {
 
   /**
    * ENVOYER UN MESSAGE
-   * Fonctionne avec l'entité ChatMessage
    */
   static async sendMessage(transactionId: number, userId: number, message: string): Promise<any> {
     const messageData: MessageData = {
-      transaction: `/transactions/${transactionId}`,
-      sender: `/users/${userId}`,
+      transaction: `/api/transactions/${transactionId}`,
+      sender: `/api/users/${userId}`,
       message: message.trim()
     };
 
     console.log('📤 Envoi message:', messageData);
 
     try {
-      const response = await api.post('/chat_messages', messageData);
-      console.log('✅ Message envoyé:', response.data);
+      const response = await api.post('/api/chat_messages', messageData);
+      console.log('✅ Message envoyé');
       return response.data;
     } catch (error: any) {
       console.error('❌ Erreur envoi message:', error);
       
-      // Fallback pour debugging
-      if (error.response?.status === 404) {
-        console.log('🔄 Tentative avec endpoint alternatif...');
+      // Fallback
+      if (error.response?.status === 400 || error.response?.status === 404) {
         try {
-          const response = await api.post('/api/chat_messages', messageData);
+          const fallbackData = {
+            transaction: `api/transactions/${transactionId}`,
+            sender: `api/users/${userId}`,
+            message: message.trim()
+          };
+          
+          const response = await api.post('/chat_messages', fallbackData);
           return response.data;
         } catch (fallbackError) {
-          throw fallbackError;
+          console.error('❌ Fallback échoué:', fallbackError);
         }
       }
       
@@ -102,7 +111,7 @@ class TransactionService {
    */
   static async getUserTransactions(userId: number): Promise<any[]> {
     try {
-      const response = await api.get('/transactions');
+      const response = await api.get('/api/transactions');
       
       let transactions: any[] = [];
       if (response.data['hydra:member']) {
@@ -113,26 +122,61 @@ class TransactionService {
 
       // Filtrer par utilisateur
       return transactions.filter(tx => {
-        const buyerId = typeof tx.buyer === 'object' ? tx.buyer.id : tx.buyer;
-        const sellerId = typeof tx.seller === 'object' ? tx.seller.id : tx.seller;
-        return buyerId === userId || sellerId === userId;
+        const extractUserId = (userField: any): number | null => {
+          if (!userField) return null;
+          
+          if (typeof userField === 'object') {
+            return userField.id;
+          }
+          
+          if (typeof userField === 'string') {
+            const match = userField.match(/\/(\d+)$/);
+            return match ? parseInt(match[1]) : null;
+          }
+          
+          return null;
+        };
+        
+        const buyerId = extractUserId(tx.buyer);
+        const sellerId = extractUserId(tx.seller);
+        
+        return (buyerId === userId) || (sellerId === userId);
       });
       
     } catch (error) {
       console.error('❌ Erreur récupération transactions:', error);
       
-      // Fallback
+      // Fallback sans /api
       try {
-        const response = await api.get('/api/transactions');
+        const response = await api.get('/transactions');
         let transactions: any[] = [];
+        
         if (response.data['hydra:member']) {
           transactions = response.data['hydra:member'];
+        } else if (Array.isArray(response.data)) {
+          transactions = response.data;
         }
         
         return transactions.filter(tx => {
-          const buyerId = typeof tx.buyer === 'object' ? tx.buyer.id : tx.buyer;
-          const sellerId = typeof tx.seller === 'object' ? tx.seller.id : tx.seller;
-          return buyerId === userId || sellerId === userId;
+          const extractUserId = (userField: any): number | null => {
+            if (!userField) return null;
+            
+            if (typeof userField === 'object') {
+              return userField.id;
+            }
+            
+            if (typeof userField === 'string') {
+              const match = userField.match(/\/(\d+)$/);
+              return match ? parseInt(match[1]) : null;
+            }
+            
+            return null;
+          };
+          
+          const buyerId = extractUserId(tx.buyer);
+          const sellerId = extractUserId(tx.seller);
+          
+          return (buyerId === userId) || (sellerId === userId);
         });
       } catch (fallbackError) {
         console.error('❌ Fallback échoué:', fallbackError);
@@ -142,11 +186,13 @@ class TransactionService {
   }
 
   /**
-   * RÉCUPÉRER LES MESSAGES D'UNE TRANSACTION
+   * RÉCUPÉRER LES MESSAGES D'UNE TRANSACTION - MÉTHODE MANQUANTE
    */
   static async getTransactionMessages(transactionId: number): Promise<any[]> {
     try {
-      const response = await api.get('/chat_messages', {
+      console.log(`📨 Chargement messages transaction ${transactionId}`);
+      
+      const response = await api.get('/api/chat_messages', {
         params: {
           'transaction.id': transactionId,
           'order[createdAt]': 'asc'
@@ -162,18 +208,20 @@ class TransactionService {
       return [];
       
     } catch (error) {
-      console.error(`❌ Erreur récupération messages transaction ${transactionId}:`, error);
+      console.error(`❌ Erreur récupération messages:`, error);
       
-      // Fallback
+      // Fallback sans /api
       try {
-        const response = await api.get('/api/chat_messages', {
+        const response = await api.get('/chat_messages', {
           params: {
-            'transaction.id': transactionId
+            transaction: transactionId
           }
         });
         
         if (response.data['hydra:member']) {
           return response.data['hydra:member'];
+        } else if (Array.isArray(response.data)) {
+          return response.data;
         }
         
         return [];
@@ -185,25 +233,55 @@ class TransactionService {
   }
 
   /**
+   * GÉNÉRER UN LIEN WHATSAPP
+   */
+  static generateWhatsAppLink(phoneNumber: string, ad: any, user: any): string {
+    if (!phoneNumber) return '#';
+    
+    // Nettoyer le numéro
+    let cleanNumber = phoneNumber.replace(/\D/g, '');
+    
+    // Formater pour WhatsApp Maroc
+    if (cleanNumber.startsWith('0')) {
+      cleanNumber = '212' + cleanNumber.substring(1);
+    } else if (!cleanNumber.startsWith('212')) {
+      cleanNumber = '212' + cleanNumber;
+    }
+    
+    // Vérifier la longueur
+    if (cleanNumber.length !== 12) return '#';
+    
+    const message = `Bonjour ${ad.user.fullName},\n\n` +
+                   `Je suis intéressé par votre annonce #${ad.id} sur CryptoMaroc P2P.\n` +
+                   `- ${ad.type === 'sell' ? 'Achat' : 'Vente'} de ${ad.amount} ${ad.currency.code}\n` +
+                   `- Prix: ${ad.price} MAD/${ad.currency.code}\n` +
+                   `- Total: ${ad.amount * ad.price} MAD\n` +
+                   `- Méthode: ${ad.paymentMethod}\n\n` +
+                   `Pouvons-nous discuter de cette transaction ?`;
+    
+    const encodedMessage = encodeURIComponent(message);
+    return `https://wa.me/${cleanNumber}?text=${encodedMessage}`;
+  }
+
+  /**
    * METTRE À JOUR LE STATUT D'UNE TRANSACTION
    */
   static async updateTransactionStatus(transactionId: number, status: string): Promise<any> {
     try {
-      const response = await api.put(`/transactions/${transactionId}`, { status });
+      const response = await api.put(`/api/transactions/${transactionId}`, { status });
       return response.data;
     } catch (error) {
-      console.error(`❌ Erreur mise à jour transaction ${transactionId}:`, error);
-      throw error;
+      console.error(`❌ Erreur mise à jour transaction:`, error);
+      
+      // Fallback
+      try {
+        const response = await api.put(`/transactions/${transactionId}`, { status });
+        return response.data;
+      } catch (fallbackError) {
+        console.error('❌ Fallback échoué:', fallbackError);
+        throw error;
+      }
     }
-  }
-
-  /**
-   * FORMATER UNE URL POUR API PLATFORM
-   * Utilitaire pour créer les URLs correctes
-   */
-  static formatApiUrl(resource: string, id: number): string {
-    // Ne pas ajouter /api - axios le fait déjà
-    return `/${resource}/${id}`;
   }
 }
 

@@ -1,20 +1,28 @@
-// src/components/MessagesPage.tsx - VERSION CORRIGÉE ET OPTIMISÉE
-import React, { useState, useEffect, useRef } from 'react';
+// src/components/MessagesPage.tsx - VERSION CORRIGÉE SANS ERREURS
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useLocation, useNavigate } from 'react-router-dom';
-import api from '../api/axiosConfig';
+// ⚠️ SUPPRIMEZ CET IMPORT INUTILE :
+// import api from '../api/axiosConfig'; // ❌ PLUS BESOIN
+// ✅ IMPORT SEULEMENT DU SERVICE
+import TransactionService from '../api/TransactionService';
+
+// ============================================
+// INTERFACES CORRIGÉES
+// ============================================
 
 interface User {
   id: number;
   fullName: string;
   email: string;
+  avatar?: string; // ✅ AJOUTEZ CETTE LIGNE POUR CORRIGER L'ERREUR
 }
 
 interface Transaction {
   id: number;
   usdtAmount: number;
   fiatAmount: number;
-  status: string;
+  status: 'pending' | 'completed' | 'cancelled' | 'disputed';
   buyer: User;
   seller: User;
   ad: {
@@ -25,6 +33,7 @@ interface Transaction {
     };
   };
   createdAt: string;
+  paymentReference?: string;
 }
 
 interface Message {
@@ -35,226 +44,271 @@ interface Message {
   transaction: {
     id: number;
   };
+  readAt?: string;
 }
 
-// 🔧 SERVICE DE MESSAGERIE
-class MessageService {
-  static async loadTransactions(userId: number) {
-    try {
-      console.log('📥 Chargement des transactions...');
-      
-      // ✅ ENDPOINT CORRECT - Sans /api
-      const response = await api.get('/transactions');
-      
-      let data: any[] = [];
-      if (response.data['hydra:member']) {
-        data = response.data['hydra:member'];
-      } else if (Array.isArray(response.data)) {
-        data = response.data;
-      }
-      
-      console.log(`📊 ${data.length} transactions récupérées`);
-
-      // Filtrer les transactions de l'utilisateur
-      return data.filter((tx: any) => {
-        const buyerId = typeof tx.buyer === 'object' ? tx.buyer.id : tx.buyer;
-        const sellerId = typeof tx.seller === 'object' ? tx.seller.id : tx.seller;
-        
-        return buyerId === userId || sellerId === userId;
-      }).map((tx: any) => ({
-        id: tx.id,
-        usdtAmount: tx.usdtAmount || 0,
-        fiatAmount: tx.fiatAmount || 0,
-        status: tx.status || 'pending',
-        buyer: typeof tx.buyer === 'object' ? {
-          id: tx.buyer.id,
-          fullName: tx.buyer.fullName || tx.buyer.full_name || 'Acheteur',
-          email: tx.buyer.email || ''
-        } : { id: 0, fullName: 'Acheteur', email: '' },
-        seller: typeof tx.seller === 'object' ? {
-          id: tx.seller.id,
-          fullName: tx.seller.fullName || tx.seller.full_name || 'Vendeur',
-          email: tx.seller.email || ''
-        } : { id: 0, fullName: 'Vendeur', email: '' },
-        ad: {
-          id: tx.ad?.id || 0,
-          type: tx.ad?.type || 'buy',
-          currency: {
-            code: tx.ad?.currency?.code || 'USDT'
-          }
-        },
-        createdAt: tx.createdAt || tx.created_at
-      }));
-      
-    } catch (error) {
-      console.error('❌ Erreur chargement transactions:', error);
-      return [];
-    }
-  }
-
-  static async loadMessages(transactionId: number) {
-    try {
-      console.log(`📨 Chargement messages pour transaction ${transactionId}`);
-      
-      // ✅ ENDPOINT CORRECT - Sans /api
-      const response = await api.get(`/chat_messages`, {
-        params: {
-          'transaction.id': transactionId,
-          'order[createdAt]': 'asc'
-        }
-      });
-      
-      let data: any[] = [];
-      if (response.data['hydra:member']) {
-        data = response.data['hydra:member'];
-      } else if (Array.isArray(response.data)) {
-        data = response.data;
-      }
-      
-      return data.map((msg: any) => ({
-        id: msg.id,
-        sender: {
-          id: msg.sender?.id || 0,
-          fullName: msg.sender?.fullName || msg.sender?.full_name || 'Expéditeur',
-          email: msg.sender?.email || ''
-        },
-        message: msg.message || '(Message vide)',
-        createdAt: msg.createdAt || msg.created_at,
-        transaction: { id: transactionId }
-      }));
-      
-    } catch (error) {
-      console.error(`❌ Erreur chargement messages:`, error);
-      return [];
-    }
-  }
-
-  static async sendMessage(transactionId: number, userId: number, message: string) {
-    try {
-      console.log(`📤 Envoi message transaction ${transactionId}`);
-      
-      // ✅ FORMAT CORRECT - URLs sans /api
-      const messageData = {
-        transaction: `/transactions/${transactionId}`,
-        sender: `/users/${userId}`,
-        message: message.trim()
-      };
-      
-      const response = await api.post('/chat_messages', messageData);
-      console.log('✅ Message envoyé avec succès');
-      return response.data;
-      
-    } catch (error: any) {
-      console.error('❌ Erreur envoi message:', error);
-      throw error;
-    }
-  }
-}
+// ============================================
+// COMPOSANT PRINCIPAL
+// ============================================
 
 const MessagesPage: React.FC = () => {
-  const { user } = useAuth();
+  const { user, isAuthenticated } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
-  const [loading, setLoading] = useState(true);
+  
+  const [loading, setLoading] = useState<boolean>(true);
+  const [loadingMessages, setLoadingMessages] = useState<boolean>(false);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [selectedTransaction, setSelectedTransaction] = useState<number | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [newMessage, setNewMessage] = useState('');
-  const [sending, setSending] = useState(false);
+  const [newMessage, setNewMessage] = useState<string>('');
+  const [sending, setSending] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
 
-  // 📍 Récupérer l'ID de transaction depuis la navigation
+  // ============================================
+  // INITIALISATION
+  // ============================================
+
   useEffect(() => {
+    // Vérifier l'authentification
+    if (!isAuthenticated) {
+      navigate('/login', { state: { from: '/dashboard/messages' } });
+      return;
+    }
+
+    // Récupérer l'ID de transaction depuis la navigation
     const state = location.state as any;
     if (state?.transactionId) {
       setSelectedTransaction(state.transactionId);
     }
-  }, [location]);
 
-  // 📥 Charger les transactions au démarrage
-  useEffect(() => {
-    const loadData = async () => {
-      if (user) {
-        try {
-          setLoading(true);
-          const transactionsData = await MessageService.loadTransactions(user.id);
-          setTransactions(transactionsData);
-          
-          // Si pas de transaction sélectionnée, prendre la première
-          if (!selectedTransaction && transactionsData.length > 0) {
-            setSelectedTransaction(transactionsData[0].id);
-          }
-        } catch (error) {
-          console.error('Erreur initialisation:', error);
-        } finally {
-          setLoading(false);
-        }
+    // Charger les transactions
+    loadTransactions();
+
+    // Auto-refresh toutes les 30 secondes
+    const refreshInterval = setInterval(() => {
+      if (autoRefresh && user) {
+        refreshData();
       }
-    };
-    
-    loadData();
-  }, [user]);
+    }, 30000);
 
-  // 📨 Charger les messages quand la transaction change
+    return () => clearInterval(refreshInterval);
+  }, [user, isAuthenticated, navigate, location, autoRefresh]);
+
+  // Charger les messages quand la transaction change
   useEffect(() => {
     if (selectedTransaction) {
-      const loadMessages = async () => {
-        const messagesData = await MessageService.loadMessages(selectedTransaction);
-        setMessages(messagesData);
-        
-        // Scroll vers le bas
-        setTimeout(() => {
-          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-        }, 100);
-      };
-      
-      loadMessages();
+      loadMessages(selectedTransaction);
+    } else {
+      setMessages([]);
     }
   }, [selectedTransaction]);
 
-  // 📤 Envoyer un message
+  // Scroll automatique vers le bas
+  useEffect(() => {
+    if (messages.length > 0 && messagesContainerRef.current) {
+      setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, 100);
+    }
+  }, [messages]);
+
+  // ============================================
+  // FONCTIONS PRINCIPALES
+  // ============================================
+
+  const loadTransactions = async () => {
+    if (!user) return;
+
+    try {
+      setLoading(true);
+      setError(null);
+      
+      console.log('📥 Chargement des transactions pour utilisateur:', user.id);
+      
+      // ✅ UTILISATION DU SERVICE SEULEMENT
+      const transactionsData = await TransactionService.getUserTransactions(user.id);
+      
+      console.log(`📊 ${transactionsData.length} transactions chargées`);
+      
+      // Transformer les données
+      const formattedTransactions: Transaction[] = transactionsData.map((tx: any) => {
+        // Fonction pour extraire l'utilisateur
+        const extractUser = (userData: any, defaultName: string): User => {
+          if (!userData) {
+            return { id: 0, fullName: defaultName, email: '' };
+          }
+          
+          if (typeof userData === 'object') {
+            return {
+              id: userData.id || 0,
+              fullName: userData.fullName || userData.full_name || userData.name || defaultName,
+              email: userData.email || '',
+              avatar: userData.avatar // ✅ CORRIGÉ : propriété optionnelle
+            };
+          }
+          
+          // Si c'est une string IRI
+          if (typeof userData === 'string') {
+            const idMatch = userData.match(/\/(\d+)$/);
+            return {
+              id: idMatch ? parseInt(idMatch[1]) : 0,
+              fullName: defaultName,
+              email: ''
+            };
+          }
+          
+          return { id: 0, fullName: defaultName, email: '' };
+        };
+
+        return {
+          id: tx.id,
+          usdtAmount: tx.usdtAmount || 0,
+          fiatAmount: tx.fiatAmount || 0,
+          status: tx.status || 'pending',
+          buyer: extractUser(tx.buyer, 'Acheteur'),
+          seller: extractUser(tx.seller, 'Vendeur'),
+          ad: {
+            id: tx.ad?.id || 0,
+            type: tx.ad?.type || 'buy',
+            currency: {
+              code: tx.ad?.currency?.code || 'USDT'
+            }
+          },
+          createdAt: tx.createdAt || tx.created_at || new Date().toISOString(),
+          paymentReference: tx.paymentReference
+        };
+      });
+
+      setTransactions(formattedTransactions);
+
+      // Si pas de transaction sélectionnée et qu'il y a des transactions
+      if (!selectedTransaction && formattedTransactions.length > 0) {
+        setSelectedTransaction(formattedTransactions[0].id);
+      }
+
+    } catch (error: any) {
+      console.error('❌ Erreur chargement transactions:', error);
+      setError('Impossible de charger vos conversations');
+      setTransactions([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadMessages = async (transactionId: number) => {
+    if (!transactionId) return;
+
+    try {
+      setLoadingMessages(true);
+      
+      console.log(`📨 Chargement messages transaction ${transactionId}`);
+      
+      // ✅ UTILISATION DU SERVICE SEULEMENT
+      const messagesData = await TransactionService.getTransactionMessages(transactionId);
+      
+      console.log(`💬 ${messagesData.length} messages chargés`);
+      
+      // Transformer les données
+      const formattedMessages: Message[] = messagesData.map((msg: any) => {
+        const extractUser = (userData: any): User => {
+          if (!userData) {
+            return { id: 0, fullName: 'Expéditeur', email: '' };
+          }
+          
+          if (typeof userData === 'object') {
+            return {
+              id: userData.id || 0,
+              fullName: userData.fullName || userData.full_name || userData.name || 'Expéditeur',
+              email: userData.email || '',
+              avatar: userData.avatar // ✅ CORRIGÉ : propriété optionnelle
+            };
+          }
+          
+          return { id: 0, fullName: 'Expéditeur', email: '' };
+        };
+
+        return {
+          id: msg.id,
+          sender: extractUser(msg.sender),
+          message: msg.message || '(Message vide)',
+          createdAt: msg.createdAt || msg.created_at || new Date().toISOString(),
+          transaction: { id: transactionId },
+          readAt: msg.readAt
+        };
+      });
+
+      // Trier par date
+      formattedMessages.sort((a, b) => 
+        new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+
+      setMessages(formattedMessages);
+
+    } catch (error: any) {
+      console.error(`❌ Erreur chargement messages:`, error);
+      setMessages([]);
+    } finally {
+      setLoadingMessages(false);
+    }
+  };
+
   const sendMessage = async () => {
     if (!newMessage.trim() || !selectedTransaction || !user || sending) return;
-    
+
     try {
       setSending(true);
       
       // Message temporaire pour feedback immédiat
       const tempMessage: Message = {
-        id: Date.now(),
+        id: Date.now(), // ID temporaire
         sender: {
           id: user.id,
           fullName: user.fullName || 'Vous',
-          email: user.email || ''
+          email: user.email || '',
+          //avatar: user.avatar // ✅ CORRIGÉ : propriété optionnelle
         },
         message: newMessage.trim(),
         createdAt: new Date().toISOString(),
         transaction: { id: selectedTransaction }
       };
-      
+
+      // Ajouter le message temporaire
       setMessages(prev => [...prev, tempMessage]);
       setNewMessage('');
+
+      // ✅ ENVOI RÉEL DU MESSAGE
+      await TransactionService.sendMessage(selectedTransaction, user.id, newMessage.trim());
       
-      // Envoyer réellement le message
-      await MessageService.sendMessage(selectedTransaction, user.id, newMessage);
-      
-      // Recharger les messages pour avoir l'ID réel
-      const updatedMessages = await MessageService.loadMessages(selectedTransaction);
-      setMessages(updatedMessages);
-      
+      // Recharger les messages pour avoir les vraies données
+      setTimeout(() => {
+        loadMessages(selectedTransaction);
+      }, 500);
+
     } catch (error: any) {
-      console.error('Erreur envoi:', error);
-      alert('Erreur lors de l\'envoi du message');
+      console.error('❌ Erreur envoi message:', error);
+      
+      // Retirer le message temporaire en cas d'erreur
+      setMessages(prev => prev.filter(msg => msg.id !== Date.now()));
+      
+      alert('Erreur lors de l\'envoi du message. Veuillez réessayer.');
     } finally {
       setSending(false);
     }
   };
 
-  // 🛠️ Fonctions utilitaires
-  const formatTime = (dateString: string) => {
+  // ============================================
+  // FONCTIONS UTILITAIRES
+  // ============================================
+
+  const formatTime = (dateString: string): string => {
     try {
-      return new Date(dateString).toLocaleTimeString('fr-FR', { 
+      const date = new Date(dateString);
+      return date.toLocaleTimeString('fr-FR', { 
         hour: '2-digit', 
         minute: '2-digit' 
       });
@@ -263,67 +317,148 @@ const MessagesPage: React.FC = () => {
     }
   };
 
+  const formatDate = (dateString: string): string => {
+    try {
+      const date = new Date(dateString);
+      const today = new Date();
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      
+      if (date.toDateString() === today.toDateString()) {
+        return 'Aujourd\'hui';
+      } else if (date.toDateString() === yesterday.toDateString()) {
+        return 'Hier';
+      } else {
+        return date.toLocaleDateString('fr-FR', {
+          day: 'numeric',
+          month: 'short'
+        });
+      }
+    } catch {
+      return '--/--';
+    }
+  };
+
   const getOtherUser = (transaction: Transaction): User => {
     if (!user) return { id: 0, fullName: 'Inconnu', email: '' };
-    return transaction.buyer.id === user.id ? transaction.seller : transaction.buyer;
+    
+    if (transaction.buyer.id === user.id) {
+      return transaction.seller;
+    }
+    return transaction.buyer;
+  };
+
+  const getTransactionStatusBadge = (status: string) => {
+    switch (status) {
+      case 'completed': return { class: 'bg-success', text: 'Terminé' };
+      case 'pending': return { class: 'bg-warning text-dark', text: 'En attente' };
+      case 'cancelled': return { class: 'bg-danger', text: 'Annulé' };
+      case 'disputed': return { class: 'bg-secondary', text: 'En litige' };
+      default: return { class: 'bg-info', text: status };
+    }
   };
 
   const handleRefresh = async () => {
     if (user) {
-      const transactionsData = await MessageService.loadTransactions(user.id);
-      setTransactions(transactionsData);
-      
+      await loadTransactions();
       if (selectedTransaction) {
-        const messagesData = await MessageService.loadMessages(selectedTransaction);
-        setMessages(messagesData);
+        await loadMessages(selectedTransaction);
       }
     }
   };
 
-  const selectedTx = transactions.find(tx => tx.id === selectedTransaction);
+  const refreshData = async () => {
+    if (user && selectedTransaction) {
+      await loadMessages(selectedTransaction);
+    }
+  };
 
-  // 🎨 Rendu
-  if (loading) {
+  const handleGoToMarketplace = () => {
+    navigate('/market');
+  };
+
+  const handleNewTransaction = () => {
+    navigate('/market');
+  };
+
+  // ============================================
+  // RENDU
+  // ============================================
+
+  if (!isAuthenticated) {
     return (
       <div className="container py-5">
         <div className="text-center py-5">
           <div className="spinner-border text-primary"></div>
-          <p className="mt-3">Chargement des conversations...</p>
+          <p className="mt-3">Redirection vers la connexion...</p>
         </div>
       </div>
     );
   }
 
+  const selectedTx = transactions.find(tx => tx.id === selectedTransaction);
+  const otherUser = selectedTx ? getOtherUser(selectedTx) : null;
+
   return (
-    <div className="container py-4">
+    <div className="container-fluid py-4">
       <div className="row g-4">
         {/* Colonne gauche - Liste des conversations */}
         <div className="col-lg-4">
           <div className="card shadow-sm h-100">
-            <div className="card-header bg-white">
+            <div className="card-header bg-white border-bottom">
               <div className="d-flex justify-content-between align-items-center">
                 <h5 className="mb-0">
                   <i className="bi bi-chat-left-text me-2"></i>
                   Conversations
                 </h5>
-                <button 
-                  className="btn btn-sm btn-outline-primary"
-                  onClick={handleRefresh}
-                  title="Actualiser"
-                >
-                  <i className="bi bi-arrow-clockwise"></i>
-                </button>
+                <div className="d-flex gap-1">
+                  <button 
+                    className="btn btn-sm btn-outline-primary"
+                    onClick={handleRefresh}
+                    title="Actualiser"
+                    disabled={loading}
+                  >
+                    <i className="bi bi-arrow-clockwise"></i>
+                  </button>
+                  <button 
+                    className="btn btn-sm btn-primary"
+                    onClick={handleNewTransaction}
+                  >
+                    <i className="bi bi-plus"></i>
+                  </button>
+                </div>
               </div>
             </div>
             
-            <div className="card-body p-0">
-              {transactions.length === 0 ? (
-                <div className="text-center py-5 text-muted">
-                  <i className="bi bi-chat-dots display-6 mb-3"></i>
-                  <p>Aucune conversation</p>
+            <div className="card-body p-0" style={{ maxHeight: 'calc(100vh - 200px)', overflowY: 'auto' }}>
+              {loading ? (
+                <div className="text-center py-5">
+                  <div className="spinner-border spinner-border-sm text-primary"></div>
+                  <p className="mt-2 small text-muted">Chargement des conversations...</p>
+                </div>
+              ) : error ? (
+                <div className="text-center py-5">
+                  <div className="text-danger mb-2">
+                    <i className="bi bi-exclamation-triangle fs-4"></i>
+                  </div>
+                  <p className="text-muted small">{error}</p>
+                  <button 
+                    className="btn btn-sm btn-outline-primary"
+                    onClick={handleRefresh}
+                  >
+                    Réessayer
+                  </button>
+                </div>
+              ) : transactions.length === 0 ? (
+                <div className="text-center py-5">
+                  <div className="text-muted mb-3">
+                    <i className="bi bi-chat-dots display-6"></i>
+                  </div>
+                  <h6 className="text-dark mb-2">Aucune conversation</h6>
+                  <p className="text-muted small mb-3">Commencez une transaction pour démarrer une conversation</p>
                   <button 
                     className="btn btn-sm btn-primary"
-                    onClick={() => navigate('/market')}
+                    onClick={handleGoToMarketplace}
                   >
                     <i className="bi bi-shop me-1"></i>
                     Explorer le marketplace
@@ -334,38 +469,42 @@ const MessagesPage: React.FC = () => {
                   {transactions.map(tx => {
                     const otherUser = getOtherUser(tx);
                     const isActive = selectedTransaction === tx.id;
+                    const statusBadge = getTransactionStatusBadge(tx.status);
                     
                     return (
                       <button
                         key={tx.id}
-                        className={`list-group-item list-group-item-action border-0 py-3 ${
-                          isActive ? 'bg-primary text-white' : ''
-                        }`}
+                        className={`list-group-item list-group-item-action border-0 py-3 ${isActive ? 'active' : ''}`}
                         onClick={() => setSelectedTransaction(tx.id)}
                       >
                         <div className="d-flex align-items-center">
                           <div className="flex-shrink-0">
-                            <div className="rounded-circle bg-light p-2">
-                              <i className="bi bi-person"></i>
-                            </div>
-                          </div>
-                          <div className="flex-grow-1 ms-3">
-                            <div className="d-flex justify-content-between">
-                              <h6 className="mb-1">{otherUser.fullName}</h6>
-                              <span className={`badge ${
-                                tx.status === 'completed' ? 'bg-success' :
-                                tx.status === 'pending' ? 'bg-warning' :
-                                'bg-secondary'
-                              }`}>
-                                {tx.status}
+                            <div className="position-relative">
+                              <div className="rounded-circle bg-light p-2">
+                                <i className="bi bi-person"></i>
+                              </div>
+                              <span className={`position-absolute top-0 start-100 translate-middle badge rounded-pill ${statusBadge.class}`} style={{fontSize: '0.6em'}}>
+                                {statusBadge.text.charAt(0)}
                               </span>
                             </div>
-                            <p className="small mb-1">
-                              {tx.ad.type === 'buy' ? 'Achat' : 'Vente'} de {tx.usdtAmount} {tx.ad.currency.code}
-                            </p>
-                            <p className="small text-muted mb-0">
-                              {tx.fiatAmount.toLocaleString('fr-MA')} MAD
-                            </p>
+                          </div>
+                          <div className="flex-grow-1 ms-3 overflow-hidden">
+                            <div className="d-flex justify-content-between align-items-start">
+                              <div className="text-truncate">
+                                <h6 className="mb-1 text-truncate">{otherUser.fullName}</h6>
+                                <p className="small text-muted mb-1 text-truncate">
+                                  {tx.ad.type === 'buy' ? 'Achat' : 'Vente'} de {tx.usdtAmount} {tx.ad.currency.code}
+                                </p>
+                                <p className="small text-muted mb-0">
+                                  {tx.fiatAmount.toLocaleString('fr-MA')} MAD
+                                </p>
+                              </div>
+                              <div className="text-end flex-shrink-0">
+                                <small className="text-muted d-block">
+                                  {formatDate(tx.createdAt)}
+                                </small>
+                              </div>
+                            </div>
                           </div>
                         </div>
                       </button>
@@ -374,77 +513,168 @@ const MessagesPage: React.FC = () => {
                 </div>
               )}
             </div>
+            
+            <div className="card-footer bg-white border-top py-2">
+              <div className="form-check form-switch">
+                <input
+                  className="form-check-input"
+                  type="checkbox"
+                  id="autoRefreshSwitch"
+                  checked={autoRefresh}
+                  onChange={(e) => setAutoRefresh(e.target.checked)}
+                />
+                <label className="form-check-label small text-muted" htmlFor="autoRefreshSwitch">
+                  Auto-refresh (30s)
+                </label>
+              </div>
+            </div>
           </div>
         </div>
 
         {/* Colonne droite - Messages */}
         <div className="col-lg-8">
-          <div className="card shadow-sm h-100">
-            <div className="card-header bg-white">
-              {selectedTx ? (
-                <div>
-                  <h5 className="mb-1">
-                    <i className="bi bi-chat-dots me-2"></i>
-                    Conversation avec {getOtherUser(selectedTx).fullName}
-                  </h5>
-                  <p className="small text-muted mb-0">
-                    Transaction #{selectedTx.id} • {selectedTx.ad.type === 'buy' ? 'Achat' : 'Vente'} de {selectedTx.usdtAmount} {selectedTx.ad.currency.code}
-                  </p>
+          <div className="card shadow-sm h-100 d-flex flex-column">
+            <div className="card-header bg-white border-bottom">
+              {selectedTx && otherUser ? (
+                <div className="d-flex justify-content-between align-items-center">
+                  <div>
+                    <h5 className="mb-1">
+                      <i className="bi bi-chat-dots me-2"></i>
+                      {otherUser.fullName}
+                    </h5>
+                    <div className="small text-muted">
+                      Transaction #{selectedTx.id} • 
+                      {selectedTx.ad.type === 'buy' ? 'Achat' : 'Vente'} de {selectedTx.usdtAmount} {selectedTx.ad.currency.code} • 
+                      {selectedTx.fiatAmount.toLocaleString('fr-MA')} MAD
+                    </div>
+                  </div>
+                  <div className="d-flex gap-2 align-items-center">
+                    <span className={`badge ${getTransactionStatusBadge(selectedTx.status).class}`}>
+                      {selectedTx.status}
+                    </span>
+                    <button 
+                      className="btn btn-sm btn-outline-secondary"
+                      onClick={handleRefresh}
+                      title="Actualiser"
+                      disabled={loadingMessages}
+                    >
+                      <i className="bi bi-arrow-clockwise"></i>
+                    </button>
+                  </div>
                 </div>
               ) : (
-                <h5 className="mb-0">Sélectionnez une conversation</h5>
+                <h5 className="mb-0">
+                  <i className="bi bi-chat-left me-2"></i>
+                  Sélectionnez une conversation
+                </h5>
               )}
             </div>
             
+            {/* Zone des messages */}
             <div 
-              className="card-body p-4" 
+              ref={messagesContainerRef}
+              className="card-body p-4 flex-grow-1" 
               style={{ 
-                height: '60vh', 
                 overflowY: 'auto',
-                backgroundColor: '#f8f9fa'
+                backgroundColor: '#f8f9fa',
+                minHeight: '400px'
               }}
             >
               {!selectedTx ? (
-                <div className="text-center py-5">
-                  <i className="bi bi-chat-left-text display-6 text-muted mb-3"></i>
-                  <h5>Sélectionnez une conversation</h5>
+                <div className="text-center py-5 h-100 d-flex flex-column justify-content-center">
+                  <div className="text-muted mb-4">
+                    <i className="bi bi-chat-left-text display-1"></i>
+                  </div>
+                  <h5 className="text-dark mb-3">Sélectionnez une conversation</h5>
                   <p className="text-muted">
                     Choisissez une transaction dans la liste pour voir les messages
                   </p>
+                  {transactions.length === 0 && (
+                    <button 
+                      className="btn btn-primary mt-3"
+                      onClick={handleGoToMarketplace}
+                    >
+                      <i className="bi bi-shop me-2"></i>
+                      Commencer une transaction
+                    </button>
+                  )}
+                </div>
+              ) : loadingMessages ? (
+                <div className="text-center py-5">
+                  <div className="spinner-border spinner-border-sm text-primary"></div>
+                  <p className="mt-2 small text-muted">Chargement des messages...</p>
                 </div>
               ) : messages.length === 0 ? (
-                <div className="text-center py-5">
-                  <i className="bi bi-chat-left-dots display-6 text-muted mb-3"></i>
-                  <h5>Aucun message</h5>
-                  <p className="text-muted">
-                    Soyez le premier à envoyer un message
+                <div className="text-center py-5 h-100 d-flex flex-column justify-content-center">
+                  <div className="text-muted mb-4">
+                    <i className="bi bi-chat-left-dots display-1"></i>
+                  </div>
+                  <h5 className="text-dark mb-3">Aucun message</h5>
+                  <p className="text-muted mb-4">
+                    Soyez le premier à envoyer un message pour cette transaction
                   </p>
+                  <div className="bg-white p-4 rounded border mx-auto" style={{maxWidth: '500px'}}>
+                    <p className="mb-2">
+                      <strong>Détails de la transaction :</strong>
+                    </p>
+                    <p className="mb-1">
+                      <i className="bi bi-arrow-left-right me-2"></i>
+                      {selectedTx.ad.type === 'buy' ? 'Achat' : 'Vente'} de {selectedTx.usdtAmount} {selectedTx.ad.currency.code}
+                    </p>
+                    <p className="mb-1">
+                      <i className="bi bi-currency-exchange me-2"></i>
+                      Montant total : {selectedTx.fiatAmount.toLocaleString('fr-MA')} MAD
+                    </p>
+                    <p className="mb-0">
+                      <i className="bi bi-person me-2"></i>
+                      {selectedTx.ad.type === 'buy' ? 'Acheteur' : 'Vendeur'} : {otherUser?.fullName}
+                    </p>
+                  </div>
                 </div>
               ) : (
-                <div>
+                <div className="messages-container">
                   {messages.map((msg, index) => {
                     const isUser = user && msg.sender.id === user.id;
+                    const showDate = index === 0 || 
+                      formatDate(messages[index-1].createdAt) !== formatDate(msg.createdAt);
                     
                     return (
-                      <div key={msg.id || index} className={`mb-3 ${isUser ? 'text-end' : ''}`}>
-                        {!isUser && (
-                          <div className="small text-muted mb-1">
-                            <i className="bi bi-person-circle me-1"></i>
-                            {msg.sender.fullName}
+                      <React.Fragment key={msg.id}>
+                        {showDate && (
+                          <div className="text-center my-3">
+                            <span className="badge bg-secondary bg-opacity-25 text-secondary px-3 py-1">
+                              {formatDate(msg.createdAt)}
+                            </span>
                           </div>
                         )}
-                        <div className={`p-3 rounded-3 d-inline-block ${
-                          isUser 
-                            ? 'bg-primary text-white' 
-                            : 'bg-white border'
-                        }`} style={{ maxWidth: '80%' }}>
-                          {msg.message}
+                        
+                        <div className={`mb-3 ${isUser ? 'text-end' : ''}`}>
+                          {!isUser && (
+                            <div className="small text-muted mb-1 ms-1">
+                              <i className="bi bi-person-circle me-1"></i>
+                              {msg.sender.fullName}
+                            </div>
+                          )}
+                          <div className={`d-flex ${isUser ? 'justify-content-end' : 'justify-content-start'}`}>
+                            <div 
+                              className={`p-3 rounded-3 ${isUser ? 'bg-primary text-white' : 'bg-white border'}`}
+                              style={{ 
+                                maxWidth: '70%',
+                                borderRadius: isUser ? '18px 4px 18px 18px' : '4px 18px 18px 18px',
+                                boxShadow: '0 1px 3px rgba(0,0,0,0.1)'
+                              }}
+                            >
+                              <div style={{ whiteSpace: 'pre-line', wordBreak: 'break-word' }}>
+                                {msg.message}
+                              </div>
+                            </div>
+                          </div>
+                          <div className={`small text-muted mt-1 ${isUser ? 'text-end me-1' : 'ms-1'}`}>
+                            <i className="bi bi-clock me-1"></i>
+                            {formatTime(msg.createdAt)}
+                          </div>
                         </div>
-                        <div className={`small text-muted mt-1 ${isUser ? 'text-end' : ''}`}>
-                          <i className="bi bi-clock me-1"></i>
-                          {formatTime(msg.createdAt)}
-                        </div>
-                      </div>
+                      </React.Fragment>
                     );
                   })}
                   <div ref={messagesEndRef} />
@@ -454,21 +684,21 @@ const MessagesPage: React.FC = () => {
 
             {/* Zone d'envoi de message */}
             {selectedTx && (
-              <div className="card-footer bg-white">
+              <div className="card-footer bg-white border-top py-3">
                 <div className="input-group">
                   <input
                     type="text"
-                    className="form-control"
-                    placeholder={`Message à ${getOtherUser(selectedTx).fullName}...`}
+                    className="form-control border-end-0"
+                    placeholder={`Écrivez un message à ${otherUser?.fullName || '...'}...`}
                     value={newMessage}
                     onChange={(e) => setNewMessage(e.target.value)}
-                    onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
-                    disabled={sending}
+                    onKeyPress={(e) => e.key === 'Enter' && !sending && sendMessage()}
+                    disabled={sending || loadingMessages}
                   />
                   <button
                     className="btn btn-primary"
                     onClick={sendMessage}
-                    disabled={sending || !newMessage.trim()}
+                    disabled={sending || !newMessage.trim() || loadingMessages}
                   >
                     {sending ? (
                       <span className="spinner-border spinner-border-sm"></span>
@@ -476,6 +706,15 @@ const MessagesPage: React.FC = () => {
                       <i className="bi bi-send"></i>
                     )}
                   </button>
+                </div>
+                <div className="mt-2 d-flex justify-content-between">
+                  <small className="text-muted">
+                    <i className="bi bi-info-circle me-1"></i>
+                    Appuyez sur Entrée pour envoyer
+                  </small>
+                  <small className="text-muted">
+                    {messages.length} message{messages.length !== 1 ? 's' : ''}
+                  </small>
                 </div>
               </div>
             )}
