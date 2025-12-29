@@ -1,5 +1,5 @@
 // src/components/AdCreate.tsx
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../api/axiosConfig';
@@ -39,7 +39,7 @@ interface AdCreateData {
 }
 
 // ==============================
-// CONSTANTS
+// CONSTANTS - CORRIGÉ POUR CORRESPONDRE AU BACKEND
 // ==============================
 
 const VALIDATION = {
@@ -55,6 +55,22 @@ const VALIDATION = {
     { value: 10080, label: '7 jours' }
   ]
 } as const;
+
+// CONSTANTS POUR LES STATUTS D'ANNONCE - CORRECTION IMPORTANTE
+const AD_STATUS = {
+  PENDING: 'pending',      // En attente de modération admin
+  APPROVED: 'approved',    // Approuvé par admin
+  PUBLISHED: 'published',  // Publié et visible
+  PAUSED: 'paused',       // En pause
+  REJECTED: 'rejected',   // Rejeté
+  COMPLETED: 'completed', // Transaction terminée
+  CANCELLED: 'cancelled'  // Annulé
+} as const;
+
+type AdStatus = typeof AD_STATUS[keyof typeof AD_STATUS];
+
+// Par défaut, les nouvelles annonces sont en attente
+const DEFAULT_AD_STATUS: AdStatus = AD_STATUS.PENDING;
 
 // ==============================
 // UTILITY FUNCTIONS
@@ -87,16 +103,16 @@ const maskAccountNumber = (accountNumber: string): string => {
   return '••••' + accountNumber.slice(-4);
 };
 
-const ensureFloat = (value: any): number | undefined => {
-  if (value === undefined || value === null || value === '') return undefined;
-  const num = typeof value === 'string' ? parseFloat(value) : Number(value);
-  return isNaN(num) ? undefined : num;
-};
-
-const ensureInt = (value: any): number | undefined => {
-  if (value === undefined || value === null || value === '') return undefined;
-  const num = typeof value === 'string' ? parseInt(value, 10) : Number(value);
-  return isNaN(num) ? undefined : Math.round(num);
+// Helper pour créer le texte de méthode de paiement
+const createPaymentMethodText = (banks: UserBankDetail[], type: 'buy' | 'sell'): string => {
+  if (banks.length === 0) return '';
+  
+  const bankNames = banks.map(b => b.bankName).join(', ');
+  if (type === 'buy') {
+    return `Virement bancaire pour recevoir les MAD (${bankNames})`;
+  } else {
+    return `Virement bancaire pour recevoir les paiements (${bankNames})`;
+  }
 };
 
 // ==============================
@@ -105,7 +121,7 @@ const ensureInt = (value: any): number | undefined => {
 
 const AdCreate: React.FC = () => {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
   
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -333,111 +349,141 @@ const AdCreate: React.FC = () => {
     return null;
   }, [formData, getSelectedCurrency]);
 
- const handleSubmit = async (e: React.FormEvent) => {
-  e.preventDefault();
-  setLoading(true);
-  setError(null);
-  setSuccess(null);
+  // ==============================
+  // FORM SUBMISSION - CORRIGÉ
+  // ==============================
 
-  try {
-    const validationError = validateForm();
-    if (validationError) throw new Error(validationError);
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    setSuccess(null);
 
-    const selectedCurrency = getSelectedCurrency();
-    const selectedBanks = getSelectedBankDetails();
+    try {
+      const validationError = validateForm();
+      if (validationError) throw new Error(validationError);
 
-    // Vérification cruciale : l'utilisateur doit exister
-    if (!user?.id) {
-      throw new Error('Utilisateur non connecté');
-    }
+      const selectedCurrency = getSelectedCurrency();
+      const selectedBanks = getSelectedBankDetails();
 
-    console.log('🔍 DEBUG - Données avant envoi:', {
-      user_id: user.id,
-      amount: formData.amount,
-      amount_type: typeof formData.amount,
-      price: formData.price,
-      price_type: typeof formData.price,
-      currency: formData.currency
-    });
-
-    // CORRECTION 1: Convertir explicitement en FLOAT (pas en string)
-    // CORRECTION 2: Inclure le user dans le payload
-    const postData: any = {
-      type: formData.type,
-      amount: parseFloat(formData.amount.toString()), // ✅ FLOAT, pas string
-      price: parseFloat(formData.price.toString()),   // ✅ FLOAT, pas string
-      currency: formData.currency,
-      user: `/api/users/${user.id}`,                  // ✅ USER OBLIGATOIRE
-      acceptedBankDetails: formData.acceptedBankDetails.map(id => `/api/user_bank_details/${id}`),
-      timeLimitMinutes: formData.timeLimitMinutes,
-      status: 'active',
-      paymentMethod: `Virement bancaire (${selectedBanks.map(b => b.bankName).join(', ')})`,
-      minAmountPerTransaction: formData.minAmountPerTransaction ? 
-        parseFloat(formData.minAmountPerTransaction.toString()) : null,
-      maxAmountPerTransaction: formData.maxAmountPerTransaction ? 
-        parseFloat(formData.maxAmountPerTransaction.toString()) : null
-    };
-
-    // Ajouter les termes si présents
-    if (formData.terms?.trim()) {
-      postData.terms = formData.terms.trim();
-    }
-
-    // Log détaillé pour vérifier les types
-    console.log('📤 Payload final envoyé:', {
-      ...postData,
-      amount_type: typeof postData.amount,
-      price_type: typeof postData.price,
-      user_included: !!postData.user
-    });
-
-    console.log('📤 JSON stringifié:', JSON.stringify(postData));
-
-    const response = await api.post('/ads', postData);
-    console.log('✅ Annonce créée avec succès:', response.data);
-
-    setSuccess(`✅ Annonce ${formData.type === 'buy' ? 'd\'achat' : 'de vente'} créée avec succès !`);
-    
-    setTimeout(() => {
-      navigate('/dashboard/ads');
-    }, 2000);
-
-  } catch (err: any) {
-    console.error('❌ Erreur détaillée création annonce:', err);
-    
-    // Log complet pour debug
-    if (err.response) {
-      console.error('📋 Status:', err.response.status);
-      console.error('📋 Data:', err.response.data);
-      console.error('📋 Request payload:', err.response.config?.data);
-    }
-    
-    // Messages d'erreur spécifiques
-    if (err.response?.status === 400) {
-      if (err.response.data?.detail?.includes('float') || err.response.data?.detail?.includes('amount')) {
-        setError('Erreur de type : amount et price doivent être des nombres (float)');
-      } else {
-        setError(`Erreur 400: ${err.response.data?.detail || 'Requête incorrecte'}`);
+      // Vérification cruciale : l'utilisateur doit exister
+      if (!user?.id) {
+        throw new Error('Utilisateur non connecté');
       }
-    } else if (err.response?.status === 500) {
-      if (err.response.data?.detail?.includes('user_id') || err.response.data?.detail?.includes('NOT NULL')) {
-        setError('Erreur : L\'utilisateur n\'est pas associé à l\'annonce. Problème de relation.');
-      } else {
-        setError('Erreur serveur 500. Vérifiez les logs du backend.');
+
+      console.log('🔍 DEBUG - Données avant envoi:', {
+        user_id: user.id,
+        amount: formData.amount,
+        amount_type: typeof formData.amount,
+        price: formData.price,
+        price_type: typeof formData.price,
+        currency: formData.currency
+      });
+
+      // =============================================
+      // CORRECTION PRINCIPALE : LE STATUT DOIT ÊTRE "pending" 
+      // et non "active" pour correspondre à l'entité Ad.php
+      // =============================================
+      const postData: any = {
+        type: formData.type,
+        amount: parseFloat(formData.amount.toString()),
+        price: parseFloat(formData.price.toString()),
+        currency: formData.currency,
+        user: `/api/users/${user.id}`,
+        acceptedBankDetails: formData.acceptedBankDetails.map(id => `/api/user_bank_details/${id}`),
+        timeLimitMinutes: formData.timeLimitMinutes,
+        // CORRECTION ICI : 'pending' au lieu de 'active'
+        status: DEFAULT_AD_STATUS, // Utilise 'pending' par défaut
+        paymentMethod: createPaymentMethodText(selectedBanks, formData.type),
+        minAmountPerTransaction: formData.minAmountPerTransaction ? 
+          parseFloat(formData.minAmountPerTransaction.toString()) : null,
+        maxAmountPerTransaction: formData.maxAmountPerTransaction ? 
+          parseFloat(formData.maxAmountPerTransaction.toString()) : null
+      };
+
+      // Si l'utilisateur est admin, on peut directement publier l'annonce
+      if (isAdmin) {
+        postData.status = AD_STATUS.PUBLISHED; // Les admins peuvent publier directement
       }
-    } else if (err.response?.data?.violations) {
-      const violations = err.response.data.violations;
-      const errorMsg = violations.map((v: any) => `${v.propertyPath}: ${v.message}`).join(', ');
-      setError(`Erreurs de validation: ${errorMsg}`);
-    } else if (err.message) {
-      setError(err.message);
-    } else {
-      setError('Erreur inconnue lors de la création');
+
+      // Ajouter les termes si présents
+      if (formData.terms?.trim()) {
+        postData.terms = formData.terms.trim();
+      }
+
+      // Log détaillé pour vérifier les types
+      console.log('📤 Payload final envoyé:', {
+        ...postData,
+        amount_type: typeof postData.amount,
+        price_type: typeof postData.price,
+        user_included: !!postData.user,
+        // Ajout du statut pour debug
+        status_sent: postData.status,
+        is_admin: isAdmin
+      });
+
+      console.log('📤 JSON stringifié:', JSON.stringify(postData));
+
+      const response = await api.post('/ads', postData);
+      console.log('✅ Annonce créée avec succès:', response.data);
+
+      const successMessage = isAdmin 
+        ? `✅ Annonce ${formData.type === 'buy' ? 'd\'achat' : 'de vente'} publiée directement ! (Mode Admin)`
+        : `✅ Annonce ${formData.type === 'buy' ? 'd\'achat' : 'de vente'} créée avec succès ! En attente de modération.`;
+      
+      setSuccess(successMessage);
+      
+      setTimeout(() => {
+        navigate(isAdmin ? '/dashboard/admin/ads' : '/dashboard/ads/my');
+      }, 2000);
+
+    } catch (err: any) {
+      console.error('❌ Erreur détaillée création annonce:', err);
+      
+      // Log complet pour debug
+      if (err.response) {
+        console.error('📋 Status:', err.response.status);
+        console.error('📋 Data:', err.response.data);
+        console.error('📋 Request payload:', err.response.config?.data);
+      }
+      
+      // Messages d'erreur spécifiques
+      if (err.response?.status === 400) {
+        if (err.response.data?.detail?.includes('float') || err.response.data?.detail?.includes('amount')) {
+          setError('Erreur de type : amount et price doivent être des nombres (float)');
+        } else {
+          setError(`Erreur 400: ${err.response.data?.detail || 'Requête incorrecte'}`);
+        }
+      } else if (err.response?.status === 422) {
+        if (err.response.data?.violations) {
+          const violations = err.response.data.violations;
+          const errorMsg = violations.map((v: any) => `${v.propertyPath}: ${v.message}`).join(', ');
+          setError(`Erreurs de validation: ${errorMsg}`);
+        } else if (err.response.data?.detail?.includes('status')) {
+          // Message spécifique pour l'erreur de statut
+          setError('Erreur : Le statut envoyé n\'est pas valide. Veuillez contacter l\'administrateur.');
+        } else {
+          setError(`Erreur de validation: ${err.response.data?.detail || 'Données invalides'}`);
+        }
+      } else if (err.response?.status === 500) {
+        if (err.response.data?.detail?.includes('user_id') || err.response.data?.detail?.includes('NOT NULL')) {
+          setError('Erreur : L\'utilisateur n\'est pas associé à l\'annonce. Problème de relation.');
+        } else {
+          setError('Erreur serveur 500. Vérifiez les logs du backend.');
+        }
+      } else if (err.message) {
+        setError(err.message);
+      } else {
+        setError('Erreur inconnue lors de la création');
+      }
+    } finally {
+      setLoading(false);
     }
-  } finally {
-    setLoading(false);
-  }
-};
+  };
+
+  // ==============================
+  // RENDER FUNCTIONS
+  // ==============================
 
   const renderBankDetails = () => {
     const activeBanks = getActiveBankDetails();
@@ -526,12 +572,14 @@ const AdCreate: React.FC = () => {
   // CALCULATED VALUES
   // ==============================
 
-  const cryptoCurrencies = getCryptoCurrencies();
-  const selectedCurrency = getSelectedCurrency();
-  const selectedBankDetails = getSelectedBankDetails();
-  const totalAmount = calculateTotal();
-  const validationError = validateForm();
-  const hasBankDetails = getActiveBankDetails().length > 0;
+  const cryptoCurrencies = useMemo(() => getCryptoCurrencies(), [getCryptoCurrencies]);
+  const selectedCurrency = useMemo(() => getSelectedCurrency(), [getSelectedCurrency]);
+  const selectedBankDetails = useMemo(() => getSelectedBankDetails(), [getSelectedBankDetails]);
+  const totalAmount = useMemo(() => calculateTotal(), [calculateTotal]);
+  const validationError = useMemo(() => validateForm(), [validateForm]);
+  const activeBankDetails = useMemo(() => getActiveBankDetails(), [getActiveBankDetails]);
+  
+  const hasBankDetails = activeBankDetails.length > 0;
   const canSubmit = !validationError && !loading && !dataLoading && selectedCurrency && hasBankDetails && user?.id;
 
   // ==============================
@@ -554,6 +602,12 @@ const AdCreate: React.FC = () => {
                   ? 'Publiez votre demande d\'achat de crypto'
                   : 'Publiez votre offre de vente de crypto'
                 }
+                {isAdmin && (
+                  <span className="badge bg-warning text-dark ms-2">
+                    <i className="bi bi-shield-check me-1"></i>
+                    Mode Admin
+                  </span>
+                )}
               </p>
             </div>
             <button
@@ -580,6 +634,22 @@ const AdCreate: React.FC = () => {
             <div className="alert alert-success alert-dismissible fade show" role="alert">
               <i className="bi bi-check-circle me-2"></i>
               <strong>Succès !</strong> {success}
+            </div>
+          )}
+
+          {/* Information sur le workflow de modération */}
+          {!isAdmin && (
+            <div className="alert alert-info mb-4">
+              <i className="bi bi-info-circle me-2"></i>
+              <strong>Workflow de modération :</strong> Votre annonce sera en <span className="badge bg-warning">attente</span> jusqu'à 
+              approbation par un administrateur. Vous serez notifié une fois publiée.
+            </div>
+          )}
+
+          {isAdmin && (
+            <div className="alert alert-warning mb-4">
+              <i className="bi bi-shield-check me-2"></i>
+              <strong>Mode Administrateur :</strong> Les annonces que vous créez seront directement <span className="badge bg-success">publiées</span>.
             </div>
           )}
 
@@ -822,7 +892,7 @@ const AdCreate: React.FC = () => {
                       <div className="mt-2 text-success small">
                         <i className="bi bi-check-circle me-1"></i>
                         {selectedBankDetails.length} banque(s) sélectionnée(s) : 
-                        {selectedBankDetails.map(b => ` ${b.bankName}`).join(',')}
+                        {selectedBankDetails.map(b => ` ${b.bankName}`).join(', ')}
                       </div>
                     )}
                   </div>
@@ -885,7 +955,7 @@ const AdCreate: React.FC = () => {
                     {!validationError && selectedCurrency && hasBankDetails && (
                       <div className="text-success small">
                         <i className="bi bi-check-circle me-1"></i>
-                        Formulaire valide - Prêt à publier
+                        {isAdmin ? 'Prêt à publier directement' : 'Prêt à soumettre pour modération'}
                       </div>
                     )}
                   </div>
@@ -906,12 +976,17 @@ const AdCreate: React.FC = () => {
                       {loading ? (
                         <>
                           <span className="spinner-border spinner-border-sm me-2"></span>
-                          Publication...
+                          {isAdmin ? 'Publication...' : 'Soumission...'}
                         </>
                       ) : (
                         <>
                           <i className="bi bi-check-circle me-2"></i>
-                          {formData.type === 'buy' ? 'Publier la Demande' : 'Publier l\'Offre'}
+                          {isAdmin 
+                            ? 'Publier Directement' 
+                            : formData.type === 'buy' 
+                              ? 'Soumettre la Demande' 
+                              : 'Soumettre l\'Offre'
+                          }
                         </>
                       )}
                     </button>
@@ -939,6 +1014,12 @@ const AdCreate: React.FC = () => {
                       <i className="bi bi-clock text-primary me-2"></i>
                       Annonce expire automatiquement
                     </li>
+                    {!isAdmin && (
+                      <li className="mb-2">
+                        <i className="bi bi-hourglass-split text-warning me-2"></i>
+                        Modération requise (24-48h)
+                      </li>
+                    )}
                   </ul>
                 </div>
                 <div className="col-md-6">
@@ -946,6 +1027,10 @@ const AdCreate: React.FC = () => {
                     <li className="mb-2">
                       <i className="bi bi-currency-exchange text-warning me-2"></i>
                       Prix fixes pour toute la durée
+                    </li>
+                    <li className="mb-2">
+                      <i className="bi bi-bell text-info me-2"></i>
+                      Notification lors de publication
                     </li>
                     <li>
                       <i className="bi bi-exclamation-triangle text-danger me-2"></i>

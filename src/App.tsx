@@ -1,4 +1,4 @@
-// src/App.tsx - VERSION COMPLÈTE ET OPTIMISÉE
+// src/App.tsx - VERSION CORRIGÉE
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import PublicLayout from "./components/PublicLayout";
@@ -23,6 +23,7 @@ import HowItWorksPage from "./components/HowItWorksPage";
 import AboutPage from "./components/AboutPage";
 import ContactPage from "./components/ContactPage";
 import PrivacyPage from "./components/PrivacyPage";
+import DashboardAdminAds from "./components/DashboardAdminAds";
 import { Suspense, lazy } from "react";
 
 // Composants chargés paresseusement
@@ -110,34 +111,88 @@ function App() {
               {/* Devises */}
               <Route path="currencies" element={<Currency />} />
               
-              {/* ANNONCES */}
+              {/* ANNONCES UTILISATEUR */}
               <Route path="ads">
                 <Route index element={<AdList filter="all" />} />
-                <Route path="create" element={<UserRoute><AdCreate /></UserRoute>} />
-                <Route path="my" element={<UserRoute><AdList filter="my-ads" /></UserRoute>} />
-                <Route path="edit/:id" element={<UserRoute><AdEditPage /></UserRoute>} />
+                <Route path="create" element={
+                  <UserRoute>
+                    <AdCreate />
+                  </UserRoute>
+                } />
+                <Route path="my" element={
+                  <UserRoute>
+                    <AdList filter="my-ads" />
+                  </UserRoute>
+                } />
+                <Route path="edit/:id" element={
+                  <UserRoute>
+                    <Suspense fallback={<LoadingSpinner />}>
+                      <AdEditPage />
+                    </Suspense>
+                  </UserRoute>
+                } />
               </Route>
               
               {/* ⭐ ROUTES ADMIN */}
               <Route path="admin">
-                <Route path="users" element={<AdminRoute><UserList /></AdminRoute>} />
-                <Route path="ads" element={<AdminRoute><AdList filter="moderation" /></AdminRoute>} />
-                <Route path="analytics" element={<AdminRoute><AnalyticsPage /></AdminRoute>} />
-                <Route path="bank-details" element={<AdminRoute><UserBankDetails /></AdminRoute>} />
-                <Route path="currencies" element={<AdminRoute><Currency /></AdminRoute>} />
+                {/* Gestion des utilisateurs */}
+                <Route path="users" element={
+                  <AdminRoute>
+                    <UserList />
+                  </AdminRoute>
+                } />
+                
+                {/* Modération des annonces - NOUVEAU COMPOSANT */}
+                <Route path="ads" element={
+                  <AdminRoute>
+                    <DashboardAdminAds />
+                  </AdminRoute>
+                } />
+                
+                {/* Analytics & statistiques */}
+                <Route path="analytics" element={
+                  <AdminRoute>
+                    <AnalyticsPage />
+                  </AdminRoute>
+                } />
+                
+                {/* Gestion bancaire (vue admin) */}
+                <Route path="bank-details" element={
+                  <AdminRoute>
+                    <UserBankDetails />
+                  </AdminRoute>
+                } />
+                
+                {/* Gestion des devises (vue admin) */}
+                <Route path="currencies" element={
+                  <AdminRoute>
+                    <Currency />
+                  </AdminRoute>
+                } />
               </Route>
               
               {/* 404 dans dashboard */}
               <Route path="*" element={
                 <div className="container-fluid py-4">
-                  <h1>404 - Page non trouvée</h1>
-                  <p>Cette page n'existe pas dans le dashboard.</p>
+                  <div className="alert alert-warning">
+                    <h1 className="h4 mb-3">
+                      <i className="bi bi-exclamation-triangle me-2"></i>
+                      404 - Page non trouvée
+                    </h1>
+                    <p className="mb-0">Cette page n'existe pas dans le dashboard.</p>
+                  </div>
+                  <a href="/dashboard" className="btn btn-primary">
+                    <i className="bi bi-house-door me-2"></i>
+                    Retour au tableau de bord
+                  </a>
                 </div>
               } />
             </Route>
 
             {/* Fallback global */}
-            <Route path="*" element={<Navigate to="/" />} />
+            <Route path="*" element={
+              <Navigate to="/" replace />
+            } />
           </Routes>
         </Suspense>
       </Router>
