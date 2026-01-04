@@ -52,12 +52,12 @@ const PublicLayout: React.FC = () => {
       { path: '/cookies', label: 'Cookies', icon: 'bi-cookie' },
     ],
     contactInfo: [
-      { icon: 'bi-envelope', text: 'support@cryptomaroc.ma' },
-      { icon: 'bi-telephone', text: '+212 522-XXXXXX' },
-      { icon: 'bi-geo-alt', text: 'Casablanca, Maroc' },
+      { icon: 'bi-envelope', text: 'contact@cryptomaroc.com'},
+      { icon: 'bi-telephone', text: '+212 676475435'},
+      { icon: 'bi-geo-alt', text: 'Agadir'},
     ],
     socialLinks: [
-      { icon: 'bi-facebook', url: '#', label: 'Facebook' },
+      { icon: 'bi-facebook', url:'https://ww.facebook.com/profile.php?id=100040901689839'},
       { icon: 'bi-twitter', url: '#', label: 'Twitter' },
       { icon: 'bi-linkedin', url: '#', label: 'LinkedIn' },
       { icon: 'bi-telegram', url: '#', label: 'Telegram' },
