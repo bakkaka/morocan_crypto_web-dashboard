@@ -1,4 +1,4 @@
-// src/components/TransactionList.tsx - VERSION RÉELLE
+// src/components/TransactionList.tsx - VERSION RÉELLE COMPLÈTE
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -19,7 +19,7 @@ const TransactionList: React.FC = () => {
   const { user, isAuthenticated } = useAuth();
   const navigate = useNavigate();
 
-  // Charger les transactions de l'utilisateur
+  // Charger les transactions de l'utilisateur - CORRECTION ICI
   const loadTransactions = useCallback(async () => {
     if (!isAuthenticated || !user) {
       setLoading(false);
@@ -30,6 +30,7 @@ const TransactionList: React.FC = () => {
       setLoading(true);
       console.log(`🔄 Chargement transactions utilisateur #${user.id}...`);
       
+      // CORRECTION : Utiliser getUserTransactions au lieu de TransactionService.getUserTransactions
       const userTransactions = await TransactionService.getUserTransactions(user.id);
       setTransactions(userTransactions);
       
@@ -108,26 +109,64 @@ const TransactionList: React.FC = () => {
     return configs[status] || configs.pending;
   };
 
-  const getTransactionType = (transaction: Transaction): 'buy' | 'sell' => {
-    if (typeof transaction.buyer === 'object' && typeof user === 'object') {
-      return transaction.buyer.id === user.id ? 'buy' : 'sell';
+// VERSION COMPLÈTE CORRIGÉE
+// VERSION AVEC GESTION COMPLÈTE DES TYPES
+const getTransactionType = (transaction: Transaction): 'buy' | 'sell' => {
+  try {
+    // Vérification complète
+    if (!user || !user.id) return 'buy';
+    
+    // Gérer buyer qui peut être objet ou string IRI
+    let buyerId: number | null = null;
+    
+    if (typeof transaction.buyer === 'object') {
+      buyerId = transaction.buyer.id;
+    } else if (typeof transaction.buyer === 'string' && transaction.buyer.includes('/api/users/')) {
+      // Extraire l'ID du lien IRI
+      const match = transaction.buyer.match(/\/api\/users\/(\d+)/);
+      buyerId = match ? parseInt(match[1]) : null;
     }
+    
+    // Si on a réussi à extraire l'ID du buyer, comparer avec user.id
+    if (buyerId !== null) {
+      return buyerId === user.id ? 'buy' : 'sell';
+    }
+    
+    return 'buy'; // Par défaut
+  } catch (error) {
+    console.error('Erreur getTransactionType:', error);
     return 'buy';
-  };
+  }
+};
 
-  const getCounterparty = (transaction: Transaction): string => {
+const getCounterparty = (transaction: Transaction): string => {
+  try {
     const type = getTransactionType(transaction);
     
     if (type === 'buy') {
-      return typeof transaction.seller === 'object' 
-        ? transaction.seller.fullName 
-        : 'Vendeur';
+      // Counterparty = seller
+      if (typeof transaction.seller === 'object') {
+        return transaction.seller.fullName || 'Vendeur';
+      } else if (typeof transaction.seller === 'string' && transaction.seller.includes('/api/users/')) {
+        const match = transaction.seller.match(/\/api\/users\/(\d+)/);
+        return match ? `Vendeur #${match[1]}` : 'Vendeur';
+      }
+      return 'Vendeur';
     } else {
-      return typeof transaction.buyer === 'object' 
-        ? transaction.buyer.fullName 
-        : 'Acheteur';
+      // Counterparty = buyer
+      if (typeof transaction.buyer === 'object') {
+        return transaction.buyer.fullName || 'Acheteur';
+      } else if (typeof transaction.buyer === 'string' && transaction.buyer.includes('/api/users/')) {
+        const match = transaction.buyer.match(/\/api\/users\/(\d+)/);
+        return match ? `Acheteur #${match[1]}` : 'Acheteur';
+      }
+      return 'Acheteur';
     }
-  };
+  } catch (error) {
+    console.error('Erreur getCounterparty:', error);
+    return 'Contrepartie';
+  }
+};
 
   if (!isAuthenticated) {
     return (
