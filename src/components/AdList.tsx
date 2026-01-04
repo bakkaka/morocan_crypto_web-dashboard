@@ -1,4 +1,4 @@
-// src/components/AdList.tsx - VERSION CORRIGÉE ET COMPLÈTE
+// src/components/AdList.tsx - VERSION COMPLÈTEMENT CORRIGÉE
 import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { Link, useNavigate } from 'react-router-dom';
@@ -25,6 +25,7 @@ interface Currency {
   type: 'crypto' | 'fiat';
 }
 
+// 🔴 CORRECTION : Ajouter 'published' aux statuts
 interface Ad {
   id: number;
   '@id'?: string;
@@ -32,7 +33,7 @@ interface Ad {
   amount: number;
   price: number;
   currency: Currency;
-  status: 'active' | 'paused' | 'completed' | 'cancelled' | 'pending' | 'expired';
+  status: 'published' | 'active' | 'paused' | 'completed' | 'cancelled' | 'pending' | 'expired'; // ✅ AJOUTÉ 'published'
   paymentMethod: string;
   user: User;
   createdAt: string;
@@ -46,7 +47,7 @@ interface Ad {
 }
 
 interface AdListProps {
-  filter?: 'all' | 'my-ads' | 'moderation';
+  filter?: 'all' | 'my-ads' | 'moderation' | 'published'; // ✅ AJOUTÉ 'published'
 }
 
 interface Notification {
@@ -106,7 +107,7 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
   };
 
   // ============================================
-  // FONCTIONS DE TRANSACTION (UNIQUES)
+  // FONCTIONS DE TRANSACTION
   // ============================================
 
   const handleCreateTransaction = async (ad: Ad) => {
@@ -124,12 +125,10 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
     try {
       console.log('🔄 Création transaction via service...');
       
-      // ✅ UTILISATION DU SERVICE UNIFIÉ
       const transaction = await TransactionService.createTransaction(ad, user.id);
       
       showNotification('success', 'Transaction créée avec succès !');
       
-      // Redirection vers la messagerie
       setTimeout(() => {
         navigate('/dashboard/messages', { 
           state: { 
@@ -161,12 +160,10 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
       return;
     }
 
-    // Créer une transaction puis rediriger
     handleCreateTransaction(ad);
   };
 
   const handleWhatsAppContact = (ad: Ad) => {
-    // Message simple
     const message = `Bonjour ${ad.user.fullName},\nJe suis intéressé par votre annonce #${ad.id}.\n${ad.type === 'buy' ? 'Achat' : 'Vente'} de ${ad.amount} ${ad.currency.code} à ${ad.price} MAD.\nTotal: ${calculateTotal(ad).toLocaleString('fr-MA')} MAD\n\nMerci de me contacter.`;
     
     const encodedMessage = encodeURIComponent(message);
@@ -183,12 +180,11 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
       return;
     }
 
-    // SIMPLE: Ouvrir la page messages sans transaction
     navigate('/dashboard/messages');
   };
 
   // ============================================
-  // CHARGEMENT DES ANNONCES
+  // CHARGEMENT DES ANNONCES - CORRIGÉ
   // ============================================
 
   const loadAds = useCallback(async () => {
@@ -203,13 +199,16 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
         itemsPerPage: 100
       };
 
+      // 🔴 CORRECTION CRITIQUE : 
+      // Pour filter='all' on veut les annonces PUBLIÉES, pas 'active'
       if (filter === 'my-ads' && user) {
         params.user = user.id;
       } else if (filter === 'all') {
-        params.status = 'active';
+        // ⬇️ CHANGEMENT ICI - 'published' au lieu de 'active'
+        params.status = 'published'; // ✅ CORRECTION
       }
 
-      console.log('🔄 Chargement des annonces...');
+      console.log('🔄 Chargement des annonces avec params:', params);
 
       const response = await api.get(endpoint, { params });
       console.log('✅ Réponse API:', response.data);
@@ -226,9 +225,45 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
 
       console.log('📊 Données extraites:', adsData);
 
-      // Formatage simple des annonces
+      // Formatage des annonces avec gestion des liens API Platform
       const formattedAds: Ad[] = adsData.map((ad: any) => {
-        const userData = ad.user || {};
+        // 🔴 Gestion du user (peut être un lien ou un objet)
+        let userData: any = {};
+        
+        if (ad.user) {
+          if (typeof ad.user === 'string' && ad.user.includes('/api/users/')) {
+            // C'est un lien API Platform
+            const userId = parseInt(ad.user.split('/').pop() || '0');
+            userData = {
+              id: userId,
+              fullName: 'Utilisateur',
+              reputation: 5.0
+            };
+          } else if (typeof ad.user === 'object') {
+            userData = ad.user;
+          }
+        }
+        
+        // 🔴 Gestion de currency (peut être un lien ou un objet)
+        let currencyData: any = { id: 0, code: 'USDT', name: 'Tether USD', type: 'crypto' };
+        
+        if (ad.currency) {
+          if (typeof ad.currency === 'string' && ad.currency.includes('/api/currencies/')) {
+            // C'est un lien API Platform
+            const currencyId = parseInt(ad.currency.split('/').pop() || '0');
+            currencyData = {
+              id: currencyId,
+              code: currencyId === 1 ? 'USDT' : currencyId === 2 ? 'BTC' : 'CRYPTO',
+              name: currencyId === 1 ? 'Tether USD' : currencyId === 2 ? 'Bitcoin' : 'Crypto',
+              type: 'crypto'
+            };
+          } else if (typeof ad.currency === 'object') {
+            currencyData = ad.currency;
+          }
+        }
+        
+        // 🔴 CORRECTION : Normaliser le statut
+        const status = ad.status || 'published';
         
         return {
           id: ad.id,
@@ -236,8 +271,8 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
           type: ad.type || 'buy',
           amount: parseFloat(ad.amount) || 0,
           price: parseFloat(ad.price) || 0,
-          currency: ad.currency || { id: 0, code: 'USDT', name: 'Tether USD', type: 'crypto' },
-          status: ad.status || 'active',
+          currency: currencyData,
+          status: status as Ad['status'], // ✅ Inclut 'published'
           paymentMethod: ad.paymentMethod || 'Non spécifié',
           user: {
             id: userData.id || 0,
@@ -273,7 +308,7 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
   }, [loadAds]);
 
   // ============================================
-  // FILTRAGE
+  // FILTRAGE - CORRIGÉ
   // ============================================
 
   const filteredAds = ads.filter(ad => {
@@ -288,7 +323,8 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
       return matchesSearch && matchesType && ad.user?.id === user?.id;
     }
     
-    return matchesSearch && matchesType && ad.status === 'active';
+    // 🔴 CORRECTION : Pour filter='all', on veut les annonces 'published'
+    return matchesSearch && matchesType && (ad.status === 'published' || ad.status === 'active');
   });
 
   // ============================================
@@ -299,10 +335,10 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
     return (
       <div className="container-fluid py-4">
         <div className="text-center py-5">
-          <div className="spinner-border text-primary" role="status">
+          <div className="spinner-border text-primary" style={{width: '3rem', height: '3rem'}} role="status">
             <span className="visually-hidden">Chargement...</span>
           </div>
-          <p className="mt-3">Chargement des annonces...</p>
+          <p className="mt-3">Chargement des annonces publiées...</p>
         </div>
       </div>
     );
@@ -338,10 +374,10 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
       <div className="d-flex justify-content-between align-items-center mb-4">
         <div>
           <h2 className="h3 fw-bold">
-            <i className="bi bi-megaphone me-2"></i>
+            <i className="bi bi-shop me-2"></i>
             Marketplace P2P
           </h2>
-          <p className="text-muted mb-0">Échangez des cryptomonnaies en toute sécurité</p>
+          <p className="text-muted mb-0">{filteredAds.length} annonces publiées disponibles</p>
         </div>
 
         <div className="d-flex gap-2">
@@ -358,7 +394,7 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
         </div>
       </div>
 
-      {/* Filtres simples */}
+      {/* Filtres */}
       <div className="card shadow-sm mb-4">
         <div className="card-body">
           <div className="row g-3">
@@ -391,8 +427,9 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
           </div>
           
           <div className="mt-3">
-            <span className="badge bg-primary fs-6">
-              {filteredAds.length} annonce{filteredAds.length !== 1 ? 's' : ''} trouvée{filteredAds.length !== 1 ? 's' : ''}
+            <span className="badge bg-success fs-6">
+              <i className="bi bi-check-circle me-1"></i>
+              {filteredAds.length} annonce{filteredAds.length !== 1 ? 's' : ''} publiée{filteredAds.length !== 1 ? 's' : ''}
             </span>
           </div>
         </div>
@@ -402,18 +439,23 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
       {filteredAds.length === 0 ? (
         <div className="card shadow-sm">
           <div className="card-body text-center py-5">
-            <i className="bi bi-inbox fs-1 text-muted mb-3"></i>
-            <h5 className="text-muted">Aucune annonce trouvée</h5>
-            <p className="text-muted">
+            <i className="bi bi-megaphone fs-1 text-muted mb-3"></i>
+            <h5 className="text-muted">
               {searchTerm || typeFilter !== 'all'
-                ? 'Aucune annonce ne correspond à vos critères.'
-                : 'Aucune annonce active pour le moment.'
+                ? 'Aucune annonce ne correspond à vos critères'
+                : 'Aucune annonce publiée pour le moment'
+              }
+            </h5>
+            <p className="text-muted">
+              {filter === 'all' 
+                ? 'Les annonces apparaissent ici une fois publiées par les administrateurs'
+                : 'Créez votre première annonce !'
               }
             </p>
-            {isAuthenticated && (
+            {isAuthenticated && filter !== 'my-ads' && (
               <Link to="/dashboard/ads/create" className="btn btn-primary mt-2">
                 <i className="bi bi-plus-circle me-2"></i>
-                Créer la première annonce
+                Créer une annonce
               </Link>
             )}
           </div>
@@ -423,20 +465,19 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
           {filteredAds.map((ad) => {
             const isUserAd = user && ad.user.id === user.id;
             const isSellAd = ad.type === 'sell';
+            const isPublished = ad.status === 'published';
             
             return (
               <div key={ad.id} className="col-xl-4 col-md-6">
-                <div className={`card h-100 shadow-sm hover-shadow transition-all ${
-                  ad.type === 'buy' ? 'border-success' : 'border-primary'
-                }`}>
+                <div className={`card h-100 shadow-sm hover-shadow transition-all border-${isPublished ? 'success' : 'secondary'}`}>
                   {/* En-tête */}
                   <div className="card-header d-flex justify-content-between align-items-center">
                     <div>
                       <span className={`badge ${ad.type === 'buy' ? 'bg-success' : 'bg-primary'}`}>
                         {ad.type === 'buy' ? '🛒 ACHAT' : '💰 VENTE'}
                       </span>
-                      <span className="badge ms-2 bg-secondary">
-                        {ad.status === 'active' ? 'Actif' : ad.status}
+                      <span className={`badge ms-2 ${isPublished ? 'bg-success' : 'bg-warning'}`}>
+                        {isPublished ? 'PUBLIÉ' : ad.status.toUpperCase()}
                       </span>
                     </div>
                     <div className="text-end">
@@ -498,11 +539,11 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
                     </div>
                   </div>
                   
-                  {/* Pied de carte - BOUTONS SIMPLES ET FONCTIONNELS */}
+                  {/* Pied de carte */}
                   <div className="card-footer bg-transparent">
                     <div className="d-flex flex-wrap gap-2">
                       {/* Bouton principal Acheter/Vendre */}
-                      {!isUserAd && isAuthenticated && (
+                      {!isUserAd && isAuthenticated && isPublished && (
                         <button 
                           className={`btn btn-sm flex-fill ${isSellAd ? 'btn-success' : 'btn-warning'}`}
                           onClick={() => handleContactSeller(ad)}
@@ -512,8 +553,8 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
                         </button>
                       )}
                       
-                      {/* Boutons de contact - TOUJOURS VISIBLES ET CLICABLES */}
-                      {!isUserAd && (
+                      {/* Boutons de contact */}
+                      {!isUserAd && isPublished && (
                         <div className="d-flex gap-1 w-100">
                           <button 
                             className="btn btn-outline-primary btn-sm flex-fill"
@@ -534,25 +575,13 @@ const AdList: React.FC<AdListProps> = ({ filter = 'all' }) => {
                         </div>
                       )}
                       
-                      {/* Boutons pour mes annonces */}
-                      {isUserAd && (
-                        <div className="d-flex gap-1 w-100">
-                          <button 
-                            className="btn btn-outline-warning btn-sm"
-                            onClick={() => navigate(`/dashboard/ads/edit/${ad.id}`)}
-                          >
-                            <i className="bi bi-pencil"></i> Modifier
-                          </button>
-                          <button 
-                            className="btn btn-outline-danger btn-sm"
-                            onClick={() => {
-                              if (window.confirm('Supprimer cette annonce ?')) {
-                                showNotification('info', 'Fonctionnalité à venir');
-                              }
-                            }}
-                          >
-                            <i className="bi bi-trash"></i> Supprimer
-                          </button>
+                      {/* Boutons pour annonces non publiées ou mes annonces */}
+                      {(!isPublished || isUserAd) && (
+                        <div className="alert alert-info mb-0 w-100 text-center py-2">
+                          <i className="bi bi-info-circle me-1"></i>
+                          {isUserAd 
+                            ? 'Votre annonce' 
+                            : `Annonce ${ad.status === 'pending' ? 'en attente de modération' : ad.status}`}
                         </div>
                       )}
                     </div>

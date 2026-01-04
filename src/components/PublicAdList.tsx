@@ -1,5 +1,5 @@
-// src/components/PublicAdList.tsx - VERSION COMPLÈTE OPTIMISÉE ET CORRIGÉE
-import React, { useEffect, useState, useCallback } from 'react';
+// src/components/PublicAdList.tsx - VERSION COMPLÈTEMENT CORRIGÉE
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../api/axiosConfig';
@@ -23,19 +23,21 @@ interface Currency {
   type: 'crypto' | 'fiat';
 }
 
+// 🔴 CORRECTION : Aligner les statuts avec l'API
 interface Ad {
   id: number;
   type: 'buy' | 'sell';
   amount: number;
   price: number;
   currency: Currency;
-  status: 'active' | 'paused' | 'completed' | 'cancelled';
+  status: 'published' | 'pending' | 'approved' | 'rejected' | 'paused' | 'completed' | 'cancelled'; // ✅ CORRIGÉ
   paymentMethod: string;
   user: User;
   createdAt: string;
   terms?: string;
   minAmountPerTransaction?: number;
   maxAmountPerTransaction?: number;
+  timeLimitMinutes?: number;
 }
 
 interface Notification {
@@ -69,12 +71,12 @@ const PublicAdList: React.FC = () => {
     }, 5000);
   }, []);
 
-  // 📥 CHARGEMENT DES ANNONCES
+  // 📥 CHARGEMENT DES ANNONCES - VERSION CORRIGÉE
   const loadAds = useCallback(async () => {
     try {
       setLoading(true);
       
-      console.log('🌐 Chargement des annonces...');
+      console.log('🌐 Chargement des annonces PUBLIÉES...');
       
       // Essayer avec /api/ads d'abord (ApiPlatform)
       let response;
@@ -84,7 +86,7 @@ const PublicAdList: React.FC = () => {
             page: 1,
             itemsPerPage: 100,
             'order[createdAt]': 'desc',
-            status: 'active'
+            status: 'published' // ✅ Filtre correct
           }
         });
         console.log('✅ API Platform format détecté');
@@ -97,7 +99,7 @@ const PublicAdList: React.FC = () => {
             itemsPerPage: 100,
             orderBy: 'createdAt',
             orderDirection: 'desc',
-            status: 'active'
+            status: 'published' // ✅ Filtre correct
           }
         });
       }
@@ -106,43 +108,96 @@ const PublicAdList: React.FC = () => {
       
       // Gestion des différents formats de réponse
       if (response.data['hydra:member']) {
-        // Format ApiPlatform (hydra)
         adsData = response.data['hydra:member'];
       } else if (response.data.items) {
-        // Format avec pagination
         adsData = response.data.items;
       } else if (Array.isArray(response.data)) {
-        // Format tableau simple
         adsData = response.data;
       }
       
       console.log(`📊 ${adsData.length} annonces récupérées`);
 
-      // Transformation des données
-      const formattedAds: Ad[] = adsData.map((item: any) => ({
-        id: item.id || 0,
-        type: (item.type || 'buy') as 'buy' | 'sell',
-        amount: parseFloat(item.amount) || 0,
-        price: parseFloat(item.price) || 0,
-        currency: {
-          code: item.currency?.code || item.currencyCode || 'USDT',
-          name: item.currency?.name || item.currencyName || 'Tether USD',
-          type: item.currency?.type || 'crypto'
-        },
-        status: (item.status || 'active') as 'active' | 'paused' | 'completed' | 'cancelled',
-        paymentMethod: item.paymentMethod || item.payment_method || item.paymentMethodName || 'Non spécifié',
-        user: {
-          id: item.user?.id || item.sellerId || item.userId || 0,
-          fullName: item.user?.fullName || item.user?.full_name || item.user?.name || item.sellerName || 'Utilisateur',
-          reputation: parseFloat(item.user?.reputation) || 5.0,
-          phone: item.user?.phone || item.user?.phoneNumber,
-          isVerified: item.user?.isVerified || item.user?.verified
-        },
-        createdAt: item.createdAt || item.created_at || new Date().toISOString(),
-        terms: item.terms || item.description,
-        minAmountPerTransaction: item.minAmountPerTransaction || item.min_amount,
-        maxAmountPerTransaction: item.maxAmountPerTransaction || item.max_amount
-      }));
+      // 🔴 CORRECTION : Transformation CORRECTE
+      const formattedAds: Ad[] = adsData
+        .map((item: any) => {
+          // 🔴 GESTION CORRECTE DES LIENS API PLATFORM
+          let currencyObj: Currency = { 
+            code: 'USDT', 
+            name: 'Tether USD', 
+            type: 'crypto' 
+          };
+          
+          let userObj: User = {
+            id: 0,
+            fullName: 'Utilisateur',
+            reputation: 5.0,
+            isVerified: false
+          };
+          
+          // 🔴 Gestion de currency (peut être un lien ou un objet)
+          if (item.currency) {
+            if (typeof item.currency === 'string' && item.currency.includes('/api/currencies/')) {
+              // C'est un lien API Platform, extraire l'ID
+              const currencyId = item.currency.split('/').pop();
+              currencyObj = {
+                code: currencyId === '1' ? 'USDT' : currencyId === '2' ? 'BTC' : 'CRYPTO',
+                name: currencyId === '1' ? 'Tether USD' : currencyId === '2' ? 'Bitcoin' : 'Crypto',
+                type: 'crypto'
+              };
+            } else if (typeof item.currency === 'object') {
+              // C'est déjà un objet
+              currencyObj = {
+                code: item.currency.code || 'USDT',
+                name: item.currency.name || 'Tether USD',
+                type: item.currency.type || 'crypto'
+              };
+            }
+          }
+          
+          // 🔴 Gestion de user (peut être un lien ou un objet)
+          if (item.user) {
+            if (typeof item.user === 'string' && item.user.includes('/api/users/')) {
+              // C'est un lien API Platform, extraire l'ID
+              const userId = parseInt(item.user.split('/').pop() || '0');
+              userObj = {
+                id: userId,
+                fullName: 'Utilisateur',
+                reputation: 5.0,
+                isVerified: false
+              };
+            } else if (typeof item.user === 'object') {
+              // C'est déjà un objet
+              userObj = {
+                id: item.user.id || 0,
+                fullName: item.user.fullName || item.user.full_name || item.user.name || 'Utilisateur',
+                reputation: parseFloat(item.user.reputation) || 5.0,
+                phone: item.user.phone || item.user.phoneNumber,
+                isVerified: item.user.isVerified || item.user.verified || false
+              };
+            }
+          }
+          
+          // 🔴 CORRECTION CRITIQUE : Garder le statut 'published' tel quel
+          const status = item.status || 'published';
+          
+          return {
+            id: item.id || 0,
+            type: (item.type || 'buy') as 'buy' | 'sell',
+            amount: parseFloat(item.amount) || 0,
+            price: parseFloat(item.price) || 0,
+            currency: currencyObj,
+            status: status as Ad['status'], // ✅ Garde 'published' correctement
+            paymentMethod: item.paymentMethod || item.payment_method || item.paymentMethodName || 'Non spécifié',
+            user: userObj,
+            createdAt: item.createdAt || item.created_at || new Date().toISOString(),
+            terms: item.terms || item.description,
+            minAmountPerTransaction: item.minAmountPerTransaction || item.min_amount,
+            maxAmountPerTransaction: item.maxAmountPerTransaction || item.max_amount,
+            timeLimitMinutes: item.timeLimitMinutes || 60
+          };
+        })
+        // 🔴 FILTRER UNIQUEMENT LES ANNONCES PUBLIÉES (double sécurité)
+        .filter(ad => ad.status === 'published');
 
       // Filtrer les annonces invalides
       const validAds = formattedAds.filter(ad => 
@@ -153,6 +208,8 @@ const PublicAdList: React.FC = () => {
       );
 
       setAds(validAds);
+      
+      console.log(`✅ ${validAds.length} annonces publiées valides chargées`);
       
       if (validAds.length !== formattedAds.length) {
         console.warn(`⚠️ ${formattedAds.length - validAds.length} annonces invalides filtrées`);
@@ -172,6 +229,7 @@ const PublicAdList: React.FC = () => {
     }
   }, [showNotification]);
 
+  // Effet de chargement
   useEffect(() => {
     loadAds();
     
@@ -207,20 +265,19 @@ const PublicAdList: React.FC = () => {
       
       showNotification('success', 'Transaction créée avec succès !');
 
-      // ✅ ENVOI DU MESSAGE INITIAL (sans bloquer en cas d'erreur)
-     try {
-  // Créer et envoyer le message manuellement
-  const messageText = `Bonjour ! Je suis intéressé par votre annonce #${ad.id}.\n\n` +
-    `Détails: ${ad.type === 'sell' ? 'Achat' : 'Vente'} de ${ad.amount} ${ad.currency.code}\n` +
-    `Prix: ${ad.price} MAD/${ad.currency.code}\n` +
-    `Total: ${ad.amount * ad.price} MAD`;
-  
-  await TransactionService.sendMessage(transaction.id, user.id, messageText);
-  console.log('✅ Message initial envoyé');
-} catch (messageError: any) {
-  console.warn('⚠️ Message initial non envoyé:', messageError.message || messageError);
-  showNotification('info', 'Transaction créée, mais message initial non envoyé');
-}
+      // ✅ ENVOI DU MESSAGE INITIAL
+      try {
+        const messageText = `Bonjour ! Je suis intéressé par votre annonce #${ad.id}.\n\n` +
+          `Détails: ${ad.type === 'sell' ? 'Achat' : 'Vente'} de ${ad.amount} ${ad.currency.code}\n` +
+          `Prix: ${ad.price} MAD/${ad.currency.code}\n` +
+          `Total: ${ad.amount * ad.price} MAD`;
+        
+        await TransactionService.sendMessage(transaction.id, user.id, messageText);
+        console.log('✅ Message initial envoyé');
+      } catch (messageError: any) {
+        console.warn('⚠️ Message initial non envoyé:', messageError.message || messageError);
+        showNotification('info', 'Transaction créée, mais message initial non envoyé');
+      }
 
       // Redirection vers la messagerie
       setTimeout(() => {
@@ -235,21 +292,18 @@ const PublicAdList: React.FC = () => {
       }, 1000);
 
     } catch (error: any) {
-      console.error('❌ Erreur création transaction:', {
-        message: error.message,
-        response: error.response?.data
-      });
+      console.error('❌ Erreur création transaction:', error);
       
       let errorMsg = 'Erreur lors de la création de la transaction';
       
-      if (error.message.includes('400')) {
+      if (error.message?.includes('400')) {
         errorMsg = 'Données invalides pour la transaction';
-      } else if (error.message.includes('401')) {
+      } else if (error.message?.includes('401')) {
         errorMsg = 'Session expirée, veuillez vous reconnecter';
         navigate('/login');
-      } else if (error.message.includes('404')) {
+      } else if (error.message?.includes('404')) {
         errorMsg = 'Service temporairement indisponible';
-      } else if (error.message.includes('409')) {
+      } else if (error.message?.includes('409')) {
         errorMsg = 'Transaction déjà en cours pour cette annonce';
       }
       
@@ -267,10 +321,8 @@ const PublicAdList: React.FC = () => {
       return;
     }
 
-    // Nettoyer le numéro
     const phone = ad.user.phone.replace(/\D/g, '');
     
-    // Vérifier format international
     let internationalPhone = phone;
     if (phone.startsWith('0')) {
       internationalPhone = '212' + phone.substring(1);
@@ -292,30 +344,32 @@ const PublicAdList: React.FC = () => {
     window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
   };
 
-  // 🔍 FILTRAGE ET RECHERCHE
-  const filteredAds = ads.filter(ad => {
-    // Filtre par type
-    if (typeFilter !== 'all' && ad.type !== typeFilter) {
-      return false;
-    }
-    
-    // Filtre par recherche
-    if (searchTerm.trim()) {
-      const term = searchTerm.toLowerCase();
-      return (
-        ad.currency.code.toLowerCase().includes(term) ||
-        ad.currency.name.toLowerCase().includes(term) ||
-        ad.paymentMethod.toLowerCase().includes(term) ||
-        ad.user.fullName.toLowerCase().includes(term) ||
-        (ad.terms && ad.terms.toLowerCase().includes(term))
-      );
-    }
-    
-    return true;
-  });
+  // 🔍 FILTRAGE ET RECHERCHE (optimisé avec useMemo)
+  const filteredAds = useMemo(() => {
+    return ads.filter(ad => {
+      // Filtre par type
+      if (typeFilter !== 'all' && ad.type !== typeFilter) {
+        return false;
+      }
+      
+      // Filtre par recherche
+      if (searchTerm.trim()) {
+        const term = searchTerm.toLowerCase();
+        return (
+          ad.currency.code.toLowerCase().includes(term) ||
+          ad.currency.name.toLowerCase().includes(term) ||
+          ad.paymentMethod.toLowerCase().includes(term) ||
+          ad.user.fullName.toLowerCase().includes(term) ||
+          (ad.terms && ad.terms.toLowerCase().includes(term))
+        );
+      }
+      
+      return true;
+    });
+  }, [ads, searchTerm, typeFilter]);
 
-  // 📊 FONCTIONS D'AFFICHAGE
-  const formatDate = (dateString: string): string => {
+  // 📊 FONCTIONS D'AFFICHAGE (optimisées)
+  const formatDate = useCallback((dateString: string): string => {
     try {
       const date = new Date(dateString);
       const now = new Date();
@@ -334,21 +388,37 @@ const PublicAdList: React.FC = () => {
     } catch {
       return '--/--';
     }
-  };
+  }, []);
 
-  const calculateTotal = (ad: Ad): number => {
+  const calculateTotal = useCallback((ad: Ad): number => {
     return ad.amount * ad.price;
-  };
+  }, []);
 
-  const getStatusColor = (status: string): string => {
+  const getStatusColor = useCallback((status: string): string => {
     switch (status) {
-      case 'active': return 'success';
-      case 'paused': return 'warning';
-      case 'completed': return 'secondary';
+      case 'published': return 'success';
+      case 'pending': return 'warning';
+      case 'approved': return 'info';
+      case 'paused': return 'secondary';
+      case 'completed': return 'primary';
       case 'cancelled': return 'danger';
+      case 'rejected': return 'dark';
       default: return 'info';
     }
-  };
+  }, []);
+
+  const getStatusLabel = useCallback((status: string): string => {
+    switch (status) {
+      case 'published': return 'PUBLIÉ';
+      case 'pending': return 'EN ATTENTE';
+      case 'approved': return 'APPROUVÉ';
+      case 'paused': return 'PAUSÉ';
+      case 'completed': return 'TERMINÉ';
+      case 'cancelled': return 'ANNULÉ';
+      case 'rejected': return 'REJETÉ';
+      default: return status.toUpperCase();
+    }
+  }, []);
 
   // 🎨 RENDU DU CHARGEMENT
   if (loading && ads.length === 0) {
@@ -357,7 +427,7 @@ const PublicAdList: React.FC = () => {
         <div className="text-center py-5">
           <div className="spinner-border text-primary mb-3" style={{width: '3rem', height: '3rem'}}></div>
           <h4 className="text-dark mb-2">Chargement du marketplace...</h4>
-          <p className="text-muted">Récupération des annonces en cours</p>
+          <p className="text-muted">Récupération des annonces publiées</p>
         </div>
       </div>
     );
@@ -402,7 +472,7 @@ const PublicAdList: React.FC = () => {
           <div className="d-flex align-items-center">
             <span className="badge bg-primary bg-opacity-10 text-primary fs-6 px-3 py-2">
               <i className="bi bi-coin me-1"></i>
-              {ads.length} annonce{ads.length !== 1 ? 's' : ''} active{ads.length !== 1 ? 's' : ''}
+              {ads.length} annonce{ads.length !== 1 ? 's' : ''} publiée{ads.length !== 1 ? 's' : ''}
             </span>
           </div>
         </div>
@@ -457,7 +527,7 @@ const PublicAdList: React.FC = () => {
             </div>
           </div>
           
-          {searchTerm || typeFilter !== 'all' ? (
+          {(searchTerm || typeFilter !== 'all') && (
             <div className="mt-3">
               <span className="badge bg-light text-dark fs-6">
                 {filteredAds.length} résultat{filteredAds.length !== 1 ? 's' : ''} 
@@ -465,7 +535,7 @@ const PublicAdList: React.FC = () => {
                 {typeFilter !== 'all' && ` (${typeFilter === 'buy' ? 'achats' : 'ventes'})`}
               </span>
             </div>
-          ) : null}
+          )}
         </div>
       </div>
 
@@ -478,12 +548,12 @@ const PublicAdList: React.FC = () => {
                 <i className="bi bi-inbox display-1"></i>
               </div>
               <h4 className="text-dark mb-3">
-                {searchTerm ? 'Aucune annonce trouvée' : 'Aucune annonce disponible'}
+                {searchTerm ? 'Aucune annonce trouvée' : 'Aucune annonce publiée disponible'}
               </h4>
               <p className="text-muted mb-4">
                 {searchTerm 
                   ? 'Ajustez vos critères de recherche ou réessayez plus tard'
-                  : 'Revenez plus tard pour voir de nouvelles annonces'}
+                  : 'Les annonces apparaissent ici une fois publiées par les administrateurs'}
               </p>
               {searchTerm && (
                 <button 
@@ -517,9 +587,7 @@ const PublicAdList: React.FC = () => {
                           {ad.type === 'buy' ? 'ACHAT' : 'VENTE'}
                         </span>
                         <span className={`badge bg-${statusColor} bg-opacity-10 text-${statusColor} border border-${statusColor} border-opacity-25 ms-2 px-3 py-2`}>
-                          {ad.status === 'active' ? 'ACTIF' : 
-                           ad.status === 'paused' ? 'PAUSÉ' : 
-                           ad.status === 'completed' ? 'TERMINÉ' : 'ANNULÉ'}
+                          {getStatusLabel(ad.status)}
                         </span>
                       </div>
                       <div className="text-end">
@@ -613,7 +681,6 @@ const PublicAdList: React.FC = () => {
                         </div>
                       ) : isAuthenticated ? (
                         <>
-                          {/* Bouton principal */}
                           <button
                             className={`btn w-100 mb-2 ${ad.type === 'sell' ? 'btn-success' : 'btn-warning'} ${isProcessing ? 'disabled' : ''}`}
                             onClick={() => handleCreateTransaction(ad)}
@@ -632,7 +699,6 @@ const PublicAdList: React.FC = () => {
                             )}
                           </button>
 
-                          {/* Boutons de contact */}
                           <div className="row g-2">
                             <div className="col">
                               <button
@@ -679,17 +745,7 @@ const PublicAdList: React.FC = () => {
         </div>
       )}
 
-      {/* Pagination ou message de fin */}
-      {filteredAds.length > 0 && filteredAds.length === ads.length && ads.length >= 100 && (
-        <div className="text-center mt-5 pt-3">
-          <div className="alert alert-info d-inline-flex align-items-center">
-            <i className="bi bi-info-circle me-2"></i>
-            <span>Plus de 100 annonces actives. Utilisez la recherche pour affiner.</span>
-          </div>
-        </div>
-      )}
-
-      {/* Styles CSS inline */}
+      {/* Styles CSS */}
       <style>
         {`
           .hover-lift {
